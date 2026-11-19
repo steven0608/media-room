@@ -461,6 +461,6 @@ addEventListener('resize', () => {
 });
 
 // Desktop testing hooks (used by automated checks; harmless otherwise)
-window.__room = { setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, get mode() { return mode; } };
+window.__room = { setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, get mode() { return mode; } };
 
 boot();
