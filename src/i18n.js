@@ -37,6 +37,7 @@ const STRINGS = {
   'link.offline': ['Your hub is offline — is the PC at home on, with Media Room running?', '你的电脑离线 —— 家里的电脑开着并在运行 Media Room 吗？'],
   'link.failed': ["Couldn't reach your hub: {msg}", '无法连接到你的电脑：{msg}'],
   'link.noHub': ['Open this page from your Media Room hub, or set up “connect anywhere”.', '请从 Media Room 电脑端打开此页面，或先设置「随处连接」。'],
+  'link.blocked': ['Your hub was found, but this network blocks a direct connection to it. (The relay fixes this.)', '找到了你的电脑，但当前网络阻止了直接连接。（启用中转即可解决。）'],
   'link.route.lan': ['Home network', '家庭网络'],
   'link.route.direct': ['Away · direct link', '外出 · 直连'],
   'link.route.relay': ['Away · via relay', '外出 · 中转'],

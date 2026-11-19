@@ -332,8 +332,15 @@ function pairingUi() {
   });
   $('pairing').classList.remove('hidden');
   inputs[0].focus();
+  let busy = false;
+  const button = $('pair-form').querySelector('button[type=submit]');
   $('pair-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (busy) return; // connecting can take up to 20 s — don't start it again on every tap
+    busy = true;
+    button.disabled = true;
+    button.textContent = tr('link.connecting');
+    $('pair-error').textContent = '';
     try {
       const code = inputs.map((x) => x.value).join('');
       const device = /OculusBrowser|Quest/i.test(navigator.userAgent) ? 'Quest headset' : 'Browser';
@@ -342,9 +349,16 @@ function pairingUi() {
       else await api('/api/pair', { method: 'POST', body: { code, device } });
       location.reload();
     } catch (err) {
-      $('pair-error').textContent = errorText(err);
-      inputs.forEach((x) => { x.value = ''; });
+      const msg = err.message === 'hub-offline' ? tr('link.offline')
+        : /timeout|connection failed/.test(err.message) ? tr('link.blocked')
+        : errorText(err);
+      $('pair-error').textContent = msg;
+      if (!/timeout|connection failed|hub-offline/.test(err.message)) inputs.forEach((x) => { x.value = ''; }); // keep a good code for a retry
       inputs[0].focus();
+    } finally {
+      busy = false;
+      button.disabled = false;
+      button.textContent = tr('pair.button');
     }
   });
 }
