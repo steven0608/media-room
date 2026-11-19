@@ -10,6 +10,7 @@ import { createDeck } from './room/deck.js';
 import { createMotes } from './room/motes.js';
 import { createScreen } from './room/screen.js';
 import { createReeds } from './room/reeds.js';
+import { createEnvironment, createMic } from './room/environment.js';
 import { AudioEngine, BeatDetector } from './audio/engine.js';
 import { Sfx } from './audio/sfx.js';
 import { PointerSystem } from './ui/pointer.js';
@@ -49,7 +50,16 @@ const deck = createDeck();
 const motes = createMotes();
 const screen = createScreen(renderer);
 const reeds = createReeds();
-scene.add(sky.group, lake.mesh, deck.group, motes.points, reeds.mesh, screen.group);
+const environment = createEnvironment();
+scene.add(sky.group, environment.group, lake.mesh, deck.group, motes.points, reeds.mesh, screen.group);
+
+// The karaoke microphone rides on your right controller (grip space) in VR.
+const mic = createMic();
+for (let i = 0; i < 2; i++) {
+  const grip = renderer.xr.getControllerGrip(i);
+  rig.add(grip);
+  grip.addEventListener('connected', (e) => { if (e.data.handedness === 'right' || !mic.group.parent) grip.add(mic.group); });
+}
 
 // ---------------------------------------------------------------- audio + input
 const engine = new AudioEngine();
@@ -442,6 +452,8 @@ renderer.setAnimationLoop((now) => {
   sky.update(t, s, pxScale);
   lake.update(t, s, bands, spill);
   deck.update(t, s, spill, karaoke.micLevel || 0);
+  environment.update(t, s);
+  mic.update(renderer.xr.isPresenting && mode === 'karaoke', s.accent, karaoke.micLevel || 0);
   motes.update(t, s, bands, pxScale);
   reeds.update(t, dt, mediaOn ? s : { ...s, glow: s.glow * 0.25 }, engine);
   music.update(dt, mode === 'music');
@@ -461,6 +473,6 @@ addEventListener('resize', () => {
 });
 
 // Desktop testing hooks (used by automated checks; harmless otherwise)
-window.__room = { setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, get mode() { return mode; } };
+window.__room = { setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
 
 boot();

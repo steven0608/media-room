@@ -139,7 +139,7 @@ export function makePlate(w, h, r = 0.03) {
   shape.lineTo(w / 2, h / 2 - r); shape.quadraticCurveTo(w / 2, h / 2, w / 2 - r, h / 2);
   shape.lineTo(-w / 2 + r, h / 2); shape.quadraticCurveTo(-w / 2, h / 2, -w / 2, h / 2 - r);
   shape.lineTo(-w / 2, -h / 2 + r); shape.quadraticCurveTo(-w / 2, -h / 2, -w / 2 + r, -h / 2);
-  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape, 6), new THREE.MeshBasicMaterial({ color: 0x0b1026, transparent: true, opacity: 0.78, depthWrite: false }));
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape, 6), new THREE.MeshBasicMaterial({ color: 0x0b1026, transparent: true, opacity: 0.78, depthWrite: false, side: THREE.DoubleSide })); // two-sided: tidy from behind too
   const edge = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(shape.getPoints(24).map((p) => new THREE.Vector3(p.x, p.y, 0.001))),
     new THREE.LineBasicMaterial({ color: 0xcfd8ff, transparent: true, opacity: 0.18 }),
