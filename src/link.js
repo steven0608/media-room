@@ -11,6 +11,7 @@ import { store } from './api.js';
 
 const nativeFetch = window.fetch.bind(window);
 const HUB_PATH = /^\/(api|media|stream|stream-audio|karaoke)\b/;
+const STUN = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
 
 class Link {
   constructor() {
@@ -65,7 +66,8 @@ class Link {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) { const e = new Error(j.error || 'pairing failed'); e.data = j; throw e; }
     this.saved = { signal: this.signal, hubId: j.id, token: null };
-    await this.connect();
+    this.pairCode = code; // lets the hub give this not-yet-paired headset the relay
+    try { await this.connect(); } finally { this.pairCode = null; }
     const res = await this.fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device }) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) { const e = new Error(body.error || 'pairing failed'); e.data = body; throw e; }
@@ -92,39 +94,54 @@ class Link {
     if (!this.saved?.hubId) throw new Error('not paired');
     this._set('connecting');
     const signal = this.saved.signal || this.signal;
-    const ice = await nativeFetch(`${signal}/ice`).then((r) => r.json()).catch(() => ({ iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] }));
-    const pc = new RTCPeerConnection({ iceServers: ice.iceServers });
     const ws = new WebSocket(`${signal.replace(/^http/, 'ws')}/connect?id=${this.saved.hubId}`);
-    const dc = pc.createDataChannel('mr', { ordered: true });
-    dc.binaryType = 'arraybuffer';
-    this.pc = pc; this.ws = ws; this.dc = dc;
+    this.ws = ws;
 
     return new Promise((resolve, reject) => {
+      let pc = null;
+      let iceWait = null;
       const fail = (why) => { cleanup(); this._set(why === 'hub-offline' ? 'offline' : 'failed', { error: why }); reject(new Error(why)); };
-      const timer = setTimeout(() => fail('timeout'), 20000);
-      const cleanup = () => clearTimeout(timer);
-      ws.onopen = async () => {
+      const timer = setTimeout(() => fail('timeout'), 25000);
+      const cleanup = () => { clearTimeout(timer); clearTimeout(iceWait); };
+
+      // Build the WebRTC side once we know the network routes (relay passes come from our own hub).
+      const start = async (iceServers) => {
+        if (pc) return;
+        clearTimeout(iceWait);
+        pc = new RTCPeerConnection({ iceServers });
+        const dc = pc.createDataChannel('mr', { ordered: true });
+        dc.binaryType = 'arraybuffer';
+        this.pc = pc; this.dc = dc;
         pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate.candidate, mid: e.candidate.sdpMid })); };
+        pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') fail('connection failed'); };
+        dc.onopen = async () => {
+          cleanup();
+          this._send({ t: 'hello', token: this.saved.token || undefined });
+          this._set('open', { route: await this._route() });
+          resolve();
+        };
+        dc.onclose = () => { if (this.dc === dc) this._closed(); };
+        dc.onmessage = (e) => this._onMessage(e.data);
         await pc.setLocalDescription(await pc.createOffer());
         ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription.sdp }));
+      };
+
+      ws.onopen = () => {
+        // Ask the hub for routes. It includes relay passes only for headsets it has paired
+        // (our device key, or the code we're pairing with right now).
+        ws.send(JSON.stringify({ type: 'ice', token: this.saved.token || undefined, code: this.pairCode || undefined }));
+        iceWait = setTimeout(() => start(STUN), 5000); // an older hub won't answer: go without the relay
       };
       ws.onmessage = async (e) => {
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
         if (m.type === 'hub-offline') return fail('hub-offline');
+        if (m.type === 'ice') return start(Array.isArray(m.iceServers) && m.iceServers.length ? m.iceServers : STUN);
+        if (!pc) return;
         if (m.type === 'answer') await pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
         else if (m.type === 'candidate' && m.candidate) await pc.addIceCandidate({ candidate: m.candidate.replace(/^a=/, ''), sdpMid: m.mid || '0' }).catch(() => {});
       };
       ws.onerror = () => fail('meeting point unreachable');
-      dc.onopen = async () => {
-        cleanup();
-        this._send({ t: 'hello', token: this.saved.token || undefined });
-        this._set('open', { route: await this._route() });
-        resolve();
-      };
-      dc.onclose = () => { if (this.dc === dc) this._closed(); };
-      dc.onmessage = (e) => this._onMessage(e.data);
-      pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') fail('connection failed'); };
     });
   }
 
