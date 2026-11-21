@@ -98,7 +98,12 @@ const library = new LibraryPanel({
   onKaraoke: (song) => { setMode('karaoke'); library.close(); karaoke.start(song); },
 });
 library.group.position.y = -0.06;
-ui.add(library.group);
+// In VR the panel sits below the screen and tilts towards you like a lectern (about 25° down,
+// the comfortable reading angle), so the picture above it is never covered. It also leans a
+// little to the left of the console at your right hand.
+const libraryMount = new THREE.Group();
+libraryMount.add(library.group);
+ui.add(libraryMount);
 
 // Touch the water: point at the lake and pull the trigger for ripples (hold and sweep to draw
 // them); the fireflies swarm to where you touch. VR only, so desktop drag-to-look still works.
@@ -169,10 +174,26 @@ const connectUi = createConnectPanel({ pointer, sfx });
 connectUi.group.position.set(0, -0.02, -0.78);
 ui.add(connectUi.group);
 // In VR the console sits low at your right hand; on a flat monitor it moves up into view.
+const consoleHome = { vr: false, pos: new THREE.Vector3(), tilt: 0 };
 function placeConsole(vr) {
+  libraryMount.rotation.set(vr ? -0.44 : 0, vr ? 0.12 : 0, 0, 'YXZ');
   const [x, y, z, tilt] = vr ? [0.34, -0.42, -0.5, -0.62] : [0.4, -0.35, -0.68, -0.35];
+  Object.assign(consoleHome, { vr, tilt });
+  consoleHome.pos.set(x, y, z);
   consoleUi.group.position.set(x, y, z);
   consoleUi.group.rotation.set(tilt, Math.atan2(-x, -z), 0, 'YXZ');
+}
+// In VR, while the library is open the console glides out to your right so it doesn't sit on
+// top of the library, and glides back when the library closes.
+const consoleAside = new THREE.Vector3(0.56, -0.42, -0.3);
+const consoleWant = new THREE.Vector3();
+function slideConsole(dt) {
+  if (!consoleHome.vr) return;
+  consoleWant.copy(library.isOpen ? consoleAside : consoleHome.pos);
+  const g = consoleUi.group;
+  if (g.position.distanceToSquared(consoleWant) < 1e-6) return;
+  g.position.lerp(consoleWant, Math.min(1, dt * 7));
+  g.rotation.set(consoleHome.tilt, Math.atan2(-g.position.x, -g.position.z), 0, 'YXZ');
 }
 placeConsole(false);
 
@@ -549,6 +570,7 @@ renderer.setAnimationLoop((now) => {
   karaoke.update(dt, mode === 'karaoke', t);
   library.update(dt);
   updateWidgets(dt, t);
+  slideConsole(dt);
   // while the connect card is up, it's the only thing to press
   consoleUi.group.visible = !connectUi.visible;
   if (connectUi.visible && library.isOpen) library.close();
