@@ -93,10 +93,12 @@ ui.add(library.group);
 
 // Buttons drawn on the big screen (Music: "Sing this", "Watch video").
 const screenUv = (hit) => ({ x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 });
+// Karaoke: "My voice − / +" and "Echo".
+const screenTarget = () => (mode === 'music' ? music : mode === 'karaoke' ? karaoke : null);
 pointer.add(screen.mesh, {
-  onMove: (hit) => { if (mode === 'music') music.setHover(music.hit(screenUv(hit).x, screenUv(hit).y)); },
-  onLeave: () => music.setHover(null),
-  onUp: (hit) => { if (hit && mode === 'music') music.click(music.hit(screenUv(hit).x, screenUv(hit).y)); },
+  onMove: (hit) => { const m = screenTarget(); if (m) { const p = screenUv(hit); m.setHover(m.hit(p.x, p.y)); } },
+  onLeave: () => { music.setHover(null); karaoke.setHover(null); },
+  onUp: (hit) => { const m = screenTarget(); if (hit && m) { const p = screenUv(hit); m.click(m.hit(p.x, p.y)); } },
 });
 music.onAction = async (key) => {
   const m = music.match;

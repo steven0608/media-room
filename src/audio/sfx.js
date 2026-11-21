@@ -17,7 +17,7 @@ export class Sfx {
     this.out.gain.value = this.mediaPlaying ? 0.12 : 1;
     return ctx;
   }
-  _tone(freq, t0, dur, { type = 'sine', vol = 0.08, glideTo } = {}) {
+  _tone(freq, t0, dur, { type = 'sine', vol = 0.08, glideTo, dest } = {}) {
     const ctx = this._ctx();
     const o = ctx.createOscillator();
     const g = ctx.createGain();
@@ -27,7 +27,7 @@ export class Sfx {
     g.gain.setValueAtTime(0, t0);
     g.gain.linearRampToValueAtTime(vol, t0 + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    o.connect(g).connect(this.out);
+    o.connect(g).connect(dest || this.out);
     o.start(t0);
     o.stop(t0 + dur + 0.02);
   }
@@ -71,6 +71,28 @@ export class Sfx {
     const ctx = this._ctx();
     this._tone(110, ctx.currentTime + delay, 0.25, { type: 'sine', vol: 0.12, glideTo: 60 });
   }
+  /**
+   * Karaoke count-in: "3, 2, 1" ticks and a bright "go". Unlike the other UI sounds these are
+   * never ducked under the song: their whole job is to be heard over the music.
+   */
+  count(n, go = false) {
+    const ctx = this.engine.unlock();
+    if (!this.cue) {
+      this.cue = ctx.createGain();
+      this.cue.gain.value = 1;
+      this.cue.connect(ctx.destination);
+    }
+    const t = ctx.currentTime;
+    const dest = this.cue; // the un-ducked bus
+    if (go) {
+      this._tone(1046, t, 0.35, { type: 'triangle', vol: 0.22, dest });
+      this._tone(1568, t + 0.07, 0.45, { type: 'triangle', vol: 0.18, dest });
+    } else {
+      this._tone(n === 1 ? 988 : 784, t, 0.16, { type: 'triangle', vol: 0.24, dest });
+      this._tone(n === 1 ? 1976 : 1568, t, 0.06, { type: 'sine', vol: 0.06, dest }); // a little "click" on top
+    }
+  }
+
   star(i) {
     const ctx = this._ctx();
     const notes = [523, 659, 784, 1047, 1319];

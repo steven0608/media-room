@@ -5,6 +5,7 @@
 // Songs are prepared on the PC by tools/karaoke_prep.py (instrumental + timed lyrics + melody).
 import { api, store } from '../api.js';
 import { Mic } from '../audio/pitch.js';
+import { VoiceMonitor } from '../audio/voice.js';
 import { canvasTexture, font, ellipsize, roundRect, fmtTime } from '../ui/text.js';
 import { t as tr, onLang, lyricsScript } from '../i18n.js';
 import { link } from '../link.js';
@@ -21,6 +22,12 @@ export class KaraokeMode {
     this.engine = engine;
     this.sfx = sfx;
     this.mic = new Mic(engine);
+    // Hear yourself through the speakers (KTV style), with your own volume and echo settings.
+    this.voice = new VoiceMonitor(engine, { volume: store.get('voiceVolume', 0.8), echo: store.get('voiceEcho', true) });
+    this.regions = []; // buttons drawn on the board: { key, x, y, w, h }
+    this.hover = null;
+    this.countT = 0;   // seconds left in the "3, 2, 1" before the song starts
+    this.lastCue = '';
     this.audio = new Audio();
     this.audio.preload = 'auto';
     const { canvas, ctx, tex } = canvasTexture(W, H);
@@ -75,17 +82,23 @@ export class KaraokeMode {
     this.noteIdx = 0;
     this.trail = [];
     this.offset = (this.song.offset || 0) + store.get('karaokeOffset', 0);
-    if (!this.autosing) await this.mic.open();
+    if (!this.autosing && await this.mic.open()) this.voice.connect(this.mic.source);
     this.engine.attach(this.audio);
     const inst = `/karaoke/${item.id}/instrumental.m4a`;
     this.audio.src = link.active ? await link.objectUrl(inst) : inst;
     this.audio.currentTime = 0;
-    this.state = 'singing';
-    this.audio.play().catch(() => {});
+    this.audio.pause();
+    // "3, 2, 1, Sing!" with sound, so everyone (kids too) knows when it starts.
+    this.state = 'countdown';
+    this.countT = 3.999;
+    this.countEnd = performance.now() / 1000 + this.countT; // real time, even if frames stutter
+    this.countWall = null;
+    this.lastCue = '';
     this.onChange();
   }
 
   toggle() {
+    if (this.state === 'countdown') return true; // let the count finish
     if (this.state !== 'singing') return false;
     this.engine.unlock();
     if (this.audio.paused) this.audio.play().catch(() => {}); else this.audio.pause();
@@ -113,10 +126,38 @@ export class KaraokeMode {
   }
 
   update(dt, active, clock) {
+    // You hear your own voice while a song is on (counting in, singing or paused), never elsewhere.
+    this.voice.setOpen(active && (this.state === 'countdown' || this.state === 'singing'));
     if (!active) { this.micLevel = 0; return; }
     this.frame++;
+    if (this.state === 'countdown') {
+      const before = Math.ceil(this.countT);
+      const wall = performance.now() / 1000;
+      if (this.countWall != null && wall - this.countWall > 0.5) this.countEnd += wall - this.countWall; // was away (other mode): resume, don't skip
+      this.countWall = wall;
+      this.countT = this.countEnd - wall;
+      const n = Math.ceil(this.countT);
+      if (n !== before && n >= 1 && n <= 3) this.sfx.count(n);
+      if (this.countT <= 0) {
+        this.sfx.count(0, true);
+        this.goT = clock;
+        this.state = 'singing';
+        this.audio.play().catch(() => {});
+        this.onChange();
+      }
+      if (this.mic.ready) { this.mic.read(); this.micLevel = this.mic.level; }
+      if (this.frame % 2 === 0) this.draw(this.offset - Math.max(0, this.countT), clock);
+      return;
+    }
     if (this.state === 'singing') {
       const t = this.now();
+      // audible count-in before a line that comes after a long gap: tick on 3, 2, 1
+      const ci = !this.audio.paused && this._countIn(t);
+      if (ci) {
+        const n = Math.ceil(ci.left);
+        const key = `${ci.i}:${n}`;
+        if (n >= 1 && n <= 3 && key !== this.lastCue) { this.lastCue = key; this.sfx.count(n); }
+      }
       const notes = this.song.notes;
       while (this.noteIdx < notes.length && notes[this.noteIdx].t + notes[this.noteIdx].d < t - 0.12) this.noteIdx++;
       const target = notes[this.noteIdx] && notes[this.noteIdx].t - 0.12 <= t ? notes[this.noteIdx] : null;
@@ -169,12 +210,90 @@ export class KaraokeMode {
       ctx.fillStyle = '#9aa3c7';
       ctx.font = font(30);
       ctx.fillText(tr(this.message || 'karaoke.pick'), W / 2, H / 2 + 30);
+    } else if (this.state === 'countdown') {
+      this.regions = [];
+      this._drawLane(t);
+      this._drawCountdown(clock);
+      this._drawLyrics(t, false, false);
     } else if (this.state === 'singing') {
       this._drawLane(t);
-      this._drawLyrics(t);
+      this._drawLyrics(t, true);
       this._drawHud(t);
-    } else this._drawScore(clock);
+      if (this.goT != null && clock - this.goT < 0.9) this._drawGo(clock - this.goT);
+    } else { this.regions = []; this._drawScore(clock); }
     this.texture.needsUpdate = true;
+  }
+
+  /** The line you're about to sing, if it follows a long gap and starts within 3.2 s. */
+  _countIn(t) {
+    const lines = this.song.lines;
+    const i = lines.findIndex((l) => l.end > t - 0.3);
+    if (i < 0) return null;
+    const cur = lines[i];
+    const prevEnd = i > 0 ? lines[i - 1].end : 0;
+    const left = cur.t - t;
+    return left > 0.05 && left < 3.2 && cur.t - prevEnd > 4 ? { i, left } : null;
+  }
+
+  /** Before the song: a big 3 · 2 · 1 with a ring that sweeps down each second. */
+  _drawCountdown() {
+    const ctx = this.ctx;
+    ctx.fillStyle = 'rgba(5,4,13,0.62)';
+    ctx.fillRect(0, 0, W, H);
+    const n = Math.ceil(this.countT);
+    const cx = W / 2, cy = 235;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (n > 3) {
+      ctx.fillStyle = '#e8ecff';
+      ctx.font = font(78, 800);
+      ctx.fillText(tr('karaoke.getReady'), cx, cy);
+    } else {
+      const frac = this.countT - (n - 1); // 1 → 0 through this second
+      const pop = 1 + 0.35 * Math.max(0, frac - 0.75) * 4; // springs in at the start of each second
+      ctx.lineWidth = 12;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.beginPath(); ctx.arc(cx, cy, 105, 0, Math.PI * 2); ctx.stroke();
+      const g = ctx.createLinearGradient(cx - 105, 0, cx + 105, 0);
+      g.addColorStop(0, '#ffb35c'); g.addColorStop(1, '#ff4fa3');
+      ctx.strokeStyle = g;
+      ctx.beginPath(); ctx.arc(cx, cy, 105, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke();
+      ctx.save();
+      ctx.translate(cx, cy + 6);
+      ctx.scale(pop, pop);
+      ctx.shadowColor = 'rgba(255,140,80,0.8)';
+      ctx.shadowBlur = 30;
+      ctx.fillStyle = '#ffffff';
+      ctx.font = font(140, 800);
+      ctx.fillText(String(n), 0, 0);
+      ctx.restore();
+    }
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#9aa3c7';
+    ctx.font = font(30, 600);
+    ctx.fillText(ellipsize(ctx, `${this.song.title} · ${this.song.artist}`, W - 200), cx, 70);
+    ctx.fillStyle = '#c9cff0';
+    ctx.font = font(32);
+    ctx.fillText(tr('karaoke.readyHint'), cx, 368);
+  }
+
+  /** "Sing!" flashes up as the music starts. */
+  _drawGo(age) {
+    const ctx = this.ctx;
+    const a = Math.max(0, 1 - age / 0.9);
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.textAlign = 'center';
+    ctx.translate(W / 2, 372);
+    const s = 1 + age * 0.5;
+    ctx.scale(s, s);
+    ctx.shadowColor = 'rgba(255,79,163,0.9)';
+    ctx.shadowBlur = 30;
+    ctx.fillStyle = '#ff4fa3';
+    ctx.font = font(64, 800);
+    ctx.fillText(tr('karaoke.go'), 0, 0);
+    ctx.restore();
   }
 
   _y(midi) {
@@ -231,25 +350,36 @@ export class KaraokeMode {
     ctx.restore();
   }
 
-  _drawLyrics(t) {
+  _drawLyrics(t, countIn = true, showNext = true) {
     const ctx = this.ctx;
     const lines = this.song.lines;
     let i = lines.findIndex((l) => l.end > t - 0.3);
     if (i < 0) i = lines.length;
     const cur = lines[i], next = lines[i + 1];
-    const prevEnd = i > 0 ? lines[i - 1].end : 0;
-    // count-in dots before a line that follows a long gap
-    if (cur && cur.t - t > 0.25 && cur.t - prevEnd > 4 && cur.t - t < 3.2) {
-      const left = cur.t - t;
+    // count-in before a line that follows a long gap: 3 · 2 · 1, the current number big and lit
+    // (you also hear a tick on each one)
+    const ci = countIn && this._countIn(t);
+    if (ci) {
+      const n = Math.min(3, Math.ceil(ci.left));
+      const frac = ci.left - (n - 1);
+      ctx.textAlign = 'center';
       for (let k = 0; k < 3; k++) {
-        const on = left > k + 0.2;
-        const frac = Math.min(1, Math.max(0, left - k));
-        ctx.fillStyle = on ? '#ffb35c' : 'rgba(255,255,255,0.12)';
-        ctx.beginPath(); ctx.arc(W / 2 + (k - 1) * 46, 372, on ? 6 + 8 * frac : 5, 0, 7); ctx.fill();
+        const num = 3 - k;
+        const on = num === n;
+        const passed = num > n;
+        ctx.save();
+        ctx.translate(W / 2 + (k - 1) * 70, 372);
+        const s = on ? 1 + 0.4 * Math.max(0, frac - 0.7) * 3.3 : 1;
+        ctx.scale(s, s);
+        if (on) { ctx.shadowColor = 'rgba(255,140,80,0.9)'; ctx.shadowBlur = 20; }
+        ctx.fillStyle = on ? '#ffb35c' : passed ? 'rgba(255,179,92,0.3)' : 'rgba(255,255,255,0.18)';
+        ctx.font = font(on ? 54 : 34, 800);
+        ctx.fillText(String(num), 0, 0);
+        ctx.restore();
       }
     }
     if (cur) this._drawLine(cur, t, 455, 76, true);
-    if (next) this._drawLine(next, t, 575, 44, false);
+    if (next && showNext) this._drawLine(next, t, 575, 44, false);
     if (!cur) { ctx.textAlign = 'center'; ctx.fillStyle = '#9aa3c7'; ctx.font = font(40); ctx.fillText('♪', W / 2, 470); }
   }
 
@@ -310,6 +440,55 @@ export class KaraokeMode {
     roundRect(ctx, 44, H - 40, Math.max(8, (W - 88) * Math.min(1, t / dur)), 8, 4); ctx.fillStyle = '#ff4fa3'; ctx.fill();
     ctx.font = font(22); ctx.fillStyle = '#7d86ab'; ctx.textAlign = 'right';
     ctx.fillText(`${fmtTime(Math.max(0, t))} / ${fmtTime(dur)}${this.audio.paused ? ` · ${tr('karaoke.paused')}` : ''}`, W - 44, H - 64);
+    this._drawVoiceButtons();
+  }
+
+  /** Bottom-left pills: My voice − / + and Echo. Point and pull the trigger (or click). */
+  _drawVoiceButtons() {
+    const ctx = this.ctx;
+    const v = Math.round(this.voice.volume * 100);
+    const y = H - 92, h = 40;
+    const items = [
+      { key: 'voice-', text: '−', w: 46 },
+      { key: 'voiceLabel', text: v ? tr('karaoke.voice', { p: v }) : tr('karaoke.voiceOff'), w: 0, label: true },
+      { key: 'voice+', text: '+', w: 46 },
+      { key: 'echo', text: tr(this.voice.echo ? 'karaoke.echoOn' : 'karaoke.echoOff'), w: 0, on: this.voice.echo },
+    ];
+    ctx.font = font(22, 650);
+    ctx.textBaseline = 'middle';
+    let x = 44;
+    this.regions = [];
+    for (const it of items) {
+      const w = it.w || Math.ceil(ctx.measureText(it.text).width) + 32;
+      if (!it.label) {
+        const hov = this.hover?.key === it.key;
+        roundRect(ctx, x, y, w, h, h / 2);
+        ctx.fillStyle = it.on ? (hov ? 'rgba(255,79,163,0.5)' : 'rgba(255,79,163,0.3)') : hov ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.1)';
+        ctx.fill();
+        this.regions.push({ key: it.key, x, y, w, h });
+      }
+      ctx.fillStyle = it.label ? '#c9cff0' : '#e8ecff';
+      ctx.textAlign = 'center';
+      ctx.font = font(it.text.length === 1 ? 30 : 22, 650);
+      ctx.fillText(it.text, x + w / 2, y + h / 2 + 1);
+      x += w + 10;
+    }
+  }
+
+  /** Pointer support for the board's buttons. x, y in canvas pixels. */
+  hit(x, y) {
+    return this.regions.find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) || null;
+  }
+  setHover(r) {
+    if ((r?.key ?? null) === (this.hover?.key ?? null)) return;
+    this.hover = r;
+    if (r) this.sfx.hover();
+  }
+  click(r) {
+    if (!r) return;
+    this.sfx.select();
+    if (r.key === 'voice-' || r.key === 'voice+') store.set('voiceVolume', this.voice.setVolume(this.voice.volume + (r.key === 'voice+' ? 0.1 : -0.1)));
+    else if (r.key === 'echo') { this.voice.setEcho(!this.voice.echo); store.set('voiceEcho', this.voice.echo); }
   }
 
   _drawScore(clock) {

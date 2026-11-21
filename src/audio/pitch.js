@@ -1,5 +1,5 @@
 // Microphone + pitch detection for karaoke.
-// The mic is only analysed, never played back (so there's no echo loop and no delay to hear).
+// The mic is analysed here; hearing yourself through the speakers is audio/voice.js.
 // Pitch uses the McLeod method (normalised autocorrelation): good for one singing voice,
 // wrong now and then by an octave (the score ignores octaves) and unsure on breathy notes.
 export class Mic {
@@ -24,7 +24,8 @@ export class Mic {
       const ctx = this.engine.unlock();
       this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 2048;
-      ctx.createMediaStreamSource(stream).connect(this.analyser);
+      this.source = ctx.createMediaStreamSource(stream);
+      this.source.connect(this.analyser);
       this.buf = new Float32Array(this.analyser.fftSize);
       this.sampleRate = ctx.sampleRate;
       return true;
