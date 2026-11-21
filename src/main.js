@@ -17,6 +17,7 @@ import { PointerSystem } from './ui/pointer.js';
 import { updateWidgets } from './ui/widgets.js';
 import { createConsole } from './ui/console.js';
 import { LibraryPanel } from './ui/library.js';
+import { createConnectPanel } from './ui/connect.js';
 import { MusicMode } from './modes/music.js';
 import { CinemaMode } from './modes/cinema.js';
 import { KaraokeMode } from './modes/karaoke.js';
@@ -131,6 +132,14 @@ const consoleUi = createConsole({
   },
 });
 ui.add(consoleUi.group);
+
+// The installed Quest app opens straight into VR, so connecting and pairing happen on this
+// card in front of you instead of on a flat page.
+const APP_MODE = params.has('app') || matchMedia('(display-mode: standalone)').matches
+  || matchMedia('(display-mode: fullscreen)').matches || typeof window.getDigitalGoodsService === 'function';
+const connectUi = createConnectPanel({ pointer, sfx });
+connectUi.group.position.set(0, -0.02, -0.78);
+ui.add(connectUi.group);
 // In VR the console sits low at your right hand; on a flat monitor it moves up into view.
 function placeConsole(vr) {
   const [x, y, z, tilt] = vr ? [0.34, -0.42, -0.5, -0.62] : [0.4, -0.35, -0.68, -0.35];
@@ -383,41 +392,83 @@ async function boot() {
     device.installRuntime({ forceInstall: true }); // replace the desktop browser's own (headset-less) WebXR
     window.__xrDevice = device;
   }
-  let status;
   relang();
+  $('preview').addEventListener('click', startPreview);
+  $('enter-vr').addEventListener('click', enterVR);
+  const vrOk = !!navigator.xr && (await navigator.xr.isSessionSupported('immersive-vr').catch(() => false));
+  vrState = vrOk ? 'ok' : 'none';
+  if (!vrOk) welcomeNote = { key: window.isSecureContext ? 'welcome.openInQuest' : 'welcome.needHttps' };
   // Served by the hub (home), or the public page reaching the hub over the encrypted link?
   const how = await link.init();
-  if (how.mode === 'none') { welcomeNote = { key: 'link.noHub' }; showWelcome(); updateWelcome(); return; }
-  if (how.mode === 'link') {
-    link.onState(() => updateHud());
-    if (!how.paired) return pairingUi();
-    $('welcome-sub').textContent = tr('link.connecting');
-    showWelcome();
+  if (how.mode === 'link') link.onState(() => updateHud());
+  // The installed app: straight into VR (tapping the app icon counts as the click VR needs).
+  if (APP_MODE && vrOk) await enterVR();
+  if (how.mode === 'none') return problem('link.noHub');
+  connectFlow();
+}
+
+/** Reach the hub (and pair if needed). Safe to run again from "Try again". */
+async function connectFlow() {
+  if (link.active) {
+    if (!link.saved?.hubId || !link.saved?.token) return askPair();
+    busy('link.connecting');
     try { await link.connect(); } catch (e) {
-      $('welcome-sub').textContent = tr(e.message === 'hub-offline' ? 'link.offline' : 'link.failed', { msg: e.message });
-      if (e.message === 'not paired') return pairingUi();
-      return;
+      if (e.message === 'not paired') return askPair();
+      return problem(e.message === 'hub-offline' ? 'link.offline' : /timeout|connection failed/.test(e.message) ? 'link.blocked' : 'link.failed', { msg: e.message });
     }
   }
-  try { status = await api('/api/status'); } catch (e) { $('welcome-sub').textContent = tr('welcome.hubDown', { msg: e.message }); showWelcome(); return; }
-  if (!status.authorized && link.active) { link.forget(); return pairingUi(); } // the hub forgot this headset
-  if (link.active && status.link) { link.route = status.link; updateHud(); } // the hub knows if we're home or away
-  if (!status.authorized) return pairingUi();
+  let status;
+  try { status = await api('/api/status'); } catch (e) { return problem('welcome.hubDown', { msg: e.message }); }
+  if (!status.authorized) { if (link.active) link.forget(); return askPair(); } // new headset, or the hub forgot it
+  if (link.active && status.link) link.route = status.link; // the hub knows if we're home or away
+  if (link.active && !routeTimer) {
+    // The link can start on the relay and settle on a direct path a moment later: re-check the label.
+    const refresh = () => api('/api/status').then((s) => { if (s.link && s.link !== link.route) { link.route = s.link; updateHud(); } }).catch(() => {});
+    setTimeout(refresh, 3000);
+    routeTimer = setInterval(refresh, 30000);
+  }
   libraryCounts = status.library?.counts || null;
   api('/api/karaoke').then((r) => { hasKaraoke = r.songs.length > 0; }).catch(() => {});
+  connectUi.hide();
   updateHud();
+  updateWelcome();
+  $('enter-vr').disabled = vrState !== 'ok';
+  if (renderer.xr.isPresenting) return;
   showWelcome();
-  updateWelcome();
-  $('preview').addEventListener('click', startPreview);
-  const vrBtn = $('enter-vr');
-  const ok = !!navigator.xr && (await navigator.xr.isSessionSupported('immersive-vr').catch(() => false));
-  vrBtn.disabled = !ok;
-  vrState = ok ? 'ok' : 'none';
-  if (!ok) welcomeNote = { key: window.isSecureContext ? 'welcome.openInQuest' : 'welcome.needHttps' };
-  updateWelcome();
-  vrBtn.addEventListener('click', enterVR);
   if (params.has('autostart')) startPreview();
 }
+
+let routeTimer = null;
+const inVR = () => renderer.xr.isPresenting;
+function busy(key) {
+  if (inVR()) connectUi.status(key);
+  $('welcome-sub').textContent = tr(key);
+  if (!inVR()) showWelcome();
+}
+function problem(key, vars) {
+  if (inVR()) connectUi.status(key, { vars, retry: key !== 'link.noHub' });
+  welcomeNote = null;
+  $('welcome-sub').textContent = tr(key, vars);
+  if (!inVR()) showWelcome();
+}
+function askPair() {
+  if (!inVR()) return pairingUi();
+  connectUi.pair(async (code) => {
+    const device = /OculusBrowser|Quest/i.test(navigator.userAgent) ? 'Quest headset' : 'Browser';
+    try {
+      if (link.active) await link.pair(code, device);
+      else await api('/api/pair', { method: 'POST', body: { code, device } });
+    } catch (err) {
+      const reach = /timeout|connection failed|hub-offline|unreachable/.test(err.message);
+      const wrong = ['wrong-code', 'too-many'].includes(err.data?.code) || /code/i.test(err.message);
+      const e = new Error(err.message === 'hub-offline' ? tr('link.offline') : reach ? tr('link.blocked') : wrong ? tr('connect.wrongCode') : errorText(err));
+      e.keepCode = reach; // a good code stays for a retry
+      throw e;
+    }
+    connectFlow();
+  });
+}
+connectUi.onRetry(() => connectFlow());
 
 // ---------------------------------------------------------------- frame loop
 const timer = new THREE.Timer();
@@ -463,6 +514,10 @@ renderer.setAnimationLoop((now) => {
   karaoke.update(dt, mode === 'karaoke', t);
   library.update(dt);
   updateWidgets(dt, t);
+  // while the connect card is up, it's the only thing to press
+  consoleUi.group.visible = !connectUi.visible;
+  if (connectUi.visible && library.isOpen) library.close();
+  if (connectUi.visible && t % 0.2 < dt) connectUi.update();
   pointer.update(dt);
 
   renderer.render(scene, camera);
@@ -475,6 +530,6 @@ addEventListener('resize', () => {
 });
 
 // Desktop testing hooks (used by automated checks; harmless otherwise)
-window.__room = { setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
+window.__room = { connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
 
 boot();

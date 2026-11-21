@@ -84,7 +84,7 @@ export function makeButton(pointer, sfx, { w = 0.07, h = 0.07, icon, label, acce
       ctx.restore();
     }
     if (state.label) {
-      ctx.font = font(Math.round(H * 0.3), 600);
+      ctx.font = font(Math.round(H * (!state.icon && state.label.length <= 2 ? 0.48 : 0.3)), 600); // big single digits/keys
       ctx.textBaseline = 'middle';
       ctx.textAlign = state.icon ? 'left' : 'center';
       const x = state.icon ? H * 0.88 : W / 2;
