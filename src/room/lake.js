@@ -49,7 +49,7 @@ export function createLake(spectrum) {
     ripples: { value: ripples },
     touches: { value: touches },
     spec: { value: spectrum.specTex },
-    ringGlow: { value: 0 }, eqGlow: { value: 0 },
+    ringGlow: { value: 0 }, eqGlow: { value: 0 }, screenYaw: { value: 0 },
     accent: { value: new THREE.Color(P.cyan) },
     accent2: { value: new THREE.Color(P.magenta) },
     water: { value: new THREE.Color(P.water) },
@@ -126,7 +126,7 @@ export function createLake(spectrum) {
       }`,
     fragmentShader: /* glsl */ `
       uniform float time, mid, treble, glow, skyBright, moonA, tide;
-      uniform float bass, ringGlow, eqGlow;
+      uniform float bass, ringGlow, eqGlow, screenYaw;
       uniform sampler2D spec;
       #define bass_ bass
       uniform vec3 accent, accent2, water, top, horizon, moonDir, screenColor;
@@ -152,7 +152,10 @@ export function createLake(spectrum) {
         col += vec3(0.8, 0.85, 1.0) * (pow(md, 220.0) * 3.0 + pow(md, 24.0) * 0.12) * moonA;
 
         // light from the big screen falling on the water in front of you
-        float toward = smoothstep(0.0, -10.0, vWorld.z) * exp(-abs(vWorld.x) * 0.18);
+        // (in the screen's own frame, so it follows the screen if you move it)
+        float cy_ = cos(screenYaw), sy_ = sin(screenYaw);
+        vec2 sxz = vec2(vWorld.x * cy_ - vWorld.z * sy_, vWorld.x * sy_ + vWorld.z * cy_);
+        float toward = smoothstep(0.0, -10.0, sxz.y) * exp(-abs(sxz.x) * 0.18);
         col += screenColor * toward * (0.2 + fres * 1.4);
 
         // music: glowing crests, ripple rings, colour drift, sparkles
@@ -175,8 +178,8 @@ export function createLake(spectrum) {
         vec2 wob = N.xz * 0.6;
         float rr = (vDist + wob.x - 4.4) / 0.4;
         col += accent * exp(-rr * rr) * ringGlow * 0.22;
-        float ang = atan(vWorld.x + wob.x, -vWorld.z);
-        if (abs(ang) < ${EQ_HALF.toFixed(4)} && vWorld.z < 0.0) {
+        float ang = atan(sxz.x + wob.x, -sxz.y);
+        if (abs(ang) < ${EQ_HALF.toFixed(4)} && sxz.y < 0.0) {
           float m = abs(ang) / ${EQ_HALF.toFixed(4)};
           float lvl = texture2D(spec, vec2(0.03 + m * 0.85, 0.5)).r;
           float idx = (ang / ${EQ_HALF.toFixed(4)} * 0.5 + 0.5) * 48.0;
@@ -207,6 +210,7 @@ export function createLake(spectrum) {
       touches[nextTouch].set(x, z, t, strength);
       nextTouch = (nextTouch + 1) % MAX_TOUCH;
     },
+    setScreenYaw(yaw) { uniforms.screenYaw.value = yaw; },
     update(t, s, bands, screenColor, playing = false) {
       uniforms.ringGlow.value = s.ring ?? 0;
       uniforms.eqGlow.value = (s.ring ?? 0) * (playing ? 1 : 0.3);

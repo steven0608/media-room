@@ -118,6 +118,8 @@ export function createSoundRing(spectrum) {
   group.add(ring, bars);
   return {
     group,
+    /** The equalizer stays under the screen when you move it. */
+    setYaw(yaw) { bars.rotation.y = yaw; },
     update(t, s, playing) {
       const k = s.ring ?? 0;
       uniforms.time.value = t;

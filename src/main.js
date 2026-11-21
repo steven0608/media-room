@@ -22,6 +22,7 @@ import { updateWidgets } from './ui/widgets.js';
 import { createConsole } from './ui/console.js';
 import { LibraryPanel } from './ui/library.js';
 import { createConnectPanel } from './ui/connect.js';
+import { createLayout } from './ui/layout.js';
 import { MusicMode } from './modes/music.js';
 import { CinemaMode } from './modes/cinema.js';
 import { KaraokeMode } from './modes/karaoke.js';
@@ -85,7 +86,7 @@ scene.add(ui);
 const music = new MusicMode({ engine, sfx });
 const cinema = new CinemaMode({ engine, sfx, screen, pointer });
 const karaoke = new KaraokeMode({ engine, sfx, screen, pointer, room });
-scene.add(cinema.group);
+screen.group.add(cinema.group); // subtitles + progress bar move with the screen
 if (karaoke.group) scene.add(karaoke.group);
 const modes = { music, cinema, karaoke };
 let mode = 'idle';
@@ -183,12 +184,70 @@ function placeConsole(vr) {
   consoleUi.group.position.set(x, y, z);
   consoleUi.group.rotation.set(tilt, Math.atan2(-x, -z), 0, 'YXZ');
 }
+// ---------------------------------------------------------------- move things where you like
+const SCR = CONFIG.screen;
+const scrH = screen.height;
+const screenState = { yaw: 0, dh: 0, s: 1 };
+const scrCenter = new THREE.Vector3(0, SCR.centerY, -SCR.radius);
+const minDh = (s) => CONFIG.waterY + 0.15 - SCR.centerY + (scrH * s) / 2; // bottom stays above the water
+function applyScreen(st) {
+  const s = THREE.MathUtils.clamp(st.s ?? 1, 0.6, 1.6);
+  const dh = THREE.MathUtils.clamp(st.dh ?? 0, minDh(s), 3);
+  Object.assign(screenState, { yaw: st.yaw ?? 0, dh, s });
+  const g = screen.group;
+  g.rotation.y = screenState.yaw;
+  g.scale.setScalar(s);
+  g.position.copy(scrCenter).multiplyScalar(1 - s).applyAxisAngle(THREE.Object3D.DEFAULT_UP, screenState.yaw);
+  g.position.y += dh; // scaled about its own centre, then raised/lowered
+  soundRing.setYaw(screenState.yaw);
+  lake.setScreenYaw(screenState.yaw);
+}
+const layout = createLayout({
+  pointer, sfx,
+  targets: {
+    screen: {
+      parent: screen.group, at: new THREE.Vector3(0, SCR.centerY + scrH / 2 + 0.3, -SCR.radius + 0.05), size: [1.3, 0.07],
+      read: () => ({ ...screenState }),
+      apply: applyScreen,
+      defaults: () => ({ yaw: 0, dh: 0, s: 1 }),
+      drag: (a, dyaw, dpitch) => ({ ...a, yaw: a.yaw - dyaw, dh: a.dh + dpitch * SCR.radius * a.s }),
+      stick: (a, y, dt) => ({ ...a, s: a.s - y * dt * 0.8 }), // push forward = bigger
+    },
+    library: {
+      parent: library.group, at: new THREE.Vector3(0, 0.53, -1.52), size: [0.24, 0.022],
+      enabled: () => renderer.xr.isPresenting,
+      read: () => ({ x: libraryMount.rotation.x, y: libraryMount.rotation.y }),
+      apply: (st) => libraryMount.rotation.set(st.x, st.y, 0, 'YXZ'),
+      defaults: () => ({ x: -0.44, y: 0.12 }),
+      drag: (a, dyaw, dpitch) => ({ x: THREE.MathUtils.clamp(a.x + dpitch, -1.0, 0.35), y: a.y - dyaw }),
+    },
+    console: {
+      parent: consoleUi.group, at: new THREE.Vector3(0, 0.178, 0.004), size: [0.14, 0.018],
+      enabled: () => renderer.xr.isPresenting,
+      read: () => ({ x: consoleUi.group.position.x, y: consoleUi.group.position.y, z: consoleUi.group.position.z }),
+      apply: (st) => {
+        consoleHome.custom = !st.home;
+        consoleUi.group.position.set(st.x, st.y, st.z);
+        consoleUi.group.rotation.set(consoleHome.tilt, Math.atan2(-st.x, -st.z), 0, 'YXZ');
+      },
+      defaults: () => ({ x: 0.34, y: -0.42, z: -0.5, home: true }),
+      drag: (a, dyaw, dpitch) => {
+        // swing it around you at the same distance
+        const r = Math.hypot(a.x, a.y, a.z), yaw = Math.atan2(a.x, -a.z) + dyaw;
+        const pitch = THREE.MathUtils.clamp(Math.asin(a.y / r) + dpitch, -1.2, 0.6);
+        return { x: r * Math.cos(pitch) * Math.sin(yaw), y: r * Math.sin(pitch), z: -r * Math.cos(pitch) * Math.cos(yaw) };
+      },
+    },
+  },
+});
+layout.restore('screen');
+
 // In VR, while the library is open the console glides out to your right so it doesn't sit on
 // top of the library, and glides back when the library closes.
 const consoleAside = new THREE.Vector3(0.56, -0.42, -0.3);
 const consoleWant = new THREE.Vector3();
 function slideConsole(dt) {
-  if (!consoleHome.vr) return;
+  if (!consoleHome.vr || consoleHome.custom) return; // you placed it yourself: leave it there
   consoleWant.copy(library.isOpen ? consoleAside : consoleHome.pos);
   const g = consoleUi.group;
   if (g.position.distanceToSquared(consoleWant) < 1e-6) return;
@@ -282,6 +341,7 @@ function snapTurn(dir) {
   ui.position.sub(head).applyAxisAngle(THREE.Object3D.DEFAULT_UP, a).add(head);
 }
 pointer.onStick = (hand, x, y, dt) => {
+  if (layout.dragging) { if (Math.abs(y) > 0.15) layout.stick(y, dt); return; }
   if (mode === 'cinema' && (x || y)) cinema.poke();
   if (hand === 'right') {
     if (Math.abs(x) > 0.7 && turnReady) { snapTurn(Math.sign(x)); turnReady = false; }
@@ -322,6 +382,7 @@ async function enterVR() {
     hideOverlays();
     $('hud').classList.add('hidden');
     placeConsole(true);
+    layout.restore('library', 'console');
     placeFrames = 25; // measure your head height after tracking settles
     if (mode === 'idle') setMode('music');
     setFrameRate();
@@ -571,6 +632,7 @@ renderer.setAnimationLoop((now) => {
   library.update(dt);
   updateWidgets(dt, t);
   slideConsole(dt);
+  layout.update(dt);
   // while the connect card is up, it's the only thing to press
   consoleUi.group.visible = !connectUi.visible;
   if (connectUi.visible && library.isOpen) library.close();
@@ -587,6 +649,6 @@ addEventListener('resize', () => {
 });
 
 // Desktop testing hooks (used by automated checks; harmless otherwise)
-window.__room = { spectrum, aurora, soundRing, meteors, motes, connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
+window.__room = { layout, applyScreen, spectrum, aurora, soundRing, meteors, motes, connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
 
 boot();
