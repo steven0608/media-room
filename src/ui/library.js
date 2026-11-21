@@ -12,14 +12,15 @@ const W = 1792, H = 944;
 const PAD = 48, HEADER = 196, GAP = 26, COLS = 6;
 const TILE = Math.floor((W - PAD * 2 - GAP * (COLS - 1)) / COLS);
 const ROW_H = 96;
-const TABS = ['music', 'video', 'karaoke'];
+const TABS = ['music', 'video', 'karaoke', 'nas']; // nas: browse any NAS folder live, not just scanned ones
 
 export class LibraryPanel {
   constructor({ pointer, sfx, onPlayMusic, onPlayVideo, onKaraoke }) {
     this.sfx = sfx;
     this.cb = { onPlayMusic, onPlayVideo, onKaraoke };
     this.tab = 'music';
-    this.folder = { music: null, video: null };
+    this.folder = { music: null, video: null, nas: '' };
+    this.addState = ''; // '' | 'adding' | 'added' (Add to library, NAS folders tab)
     this.data = null;
     this.loading = false;
     this.error = '';
@@ -82,7 +83,7 @@ export class LibraryPanel {
         if (wasDrag || !hit) return;
         const { x, y } = this._xy(hit);
         const r = this._regionAt(x, y);
-        if (r) r.action();
+        if (r?.action) r.action();
       },
       onWheel: (dy) => { this.scroll += dy * 1.1; this._clamp(); this.dirty = true; },
       onStick: (y, dt) => { this.scroll += y * 1500 * dt; this._clamp(); this.dirty = true; },
@@ -129,6 +130,8 @@ export class LibraryPanel {
         const r = await api('/api/karaoke');
         const busy = r.jobs.filter((j) => j.state !== 'done').map((j) => ({ ...j, kind: 'job', id: `job-${j.id}` }));
         data = { crumbs: [], folders: [], items: [...busy, ...r.songs.map((s) => ({ ...s, kind: 'karaoke' }))] };
+      } else if (tab === 'nas') {
+        data = await api(`/api/nas/browse?path=${encodeURIComponent(this.folder.nas || '')}`);
       } else {
         data = await api(`/api/library/${tab}${this.folder[tab] ? `?folder=${this.folder[tab]}` : ''}`);
       }
@@ -147,6 +150,23 @@ export class LibraryPanel {
     this.dirty = true;
   }
 
+  addLabel() {
+    if (this.addState === 'adding') return t('lib.adding');
+    if (this.addState === 'added') return t('lib.added');
+    return this.data?.canAdd ? t('lib.addToLibrary') : t('lib.inLibrary');
+  }
+
+  /** NAS folders: make the folder you're in part of the scanned library. */
+  async addToLibrary() {
+    const p = this.data?.path;
+    if (!p || this.addState) return;
+    this.sfx.select();
+    this.addState = 'adding';
+    this.dirty = true;
+    try { await api('/api/nas/add', { method: 'POST', body: { path: p } }); this.addState = 'added'; } catch (e) { this.addState = ''; this.error = { key: 'lib.loadFailed', vars: { msg: e.message } }; }
+    this.dirty = true;
+  }
+
   /** Reload without resetting the scroll position (for progress updates). */
   async refreshQuietly() {
     await this.load(true);
@@ -154,6 +174,7 @@ export class LibraryPanel {
 
   go(folderId) {
     this.folder[this.tab] = folderId;
+    this.addState = '';
     this.load();
   }
 
@@ -171,6 +192,13 @@ export class LibraryPanel {
       x += w + 14;
     }
     regions.push({ key: 'close', x: W - PAD - 64, y: 40, w: 64, h: 64, header: true, kind: 'close', action: () => this.close() });
+    if (this.tab === 'nas' && d?.path) {
+      this.ctx.font = font(28, 600);
+      const label = this.addLabel();
+      const w = Math.ceil(this.ctx.measureText(label).width) + 56;
+      const canAdd = d.canAdd && !this.addState;
+      regions.push({ key: 'add', x: W - PAD - w, y: 122, w, h: 52, header: true, kind: canAdd ? 'add' : 'info', label, action: canAdd ? () => this.addToLibrary() : null });
+    }
     if (d?.crumbs?.length > 1 && this.tab !== 'karaoke') {
       const parent = d.crumbs[d.crumbs.length - 2];
       this.ctx.font = font(28, 600);
@@ -187,7 +215,22 @@ export class LibraryPanel {
       tiles.push({ key: `f:${f.id}`, kind: 'folder', data: f, i, x: PAD + c * (TILE + GAP), y: y + r * (TILE + 86 + GAP), w: TILE, h: TILE + 70, action: () => { this.sfx.select(); this.go(f.id); } });
     });
     if (folders.length) y += Math.ceil(folders.length / COLS) * (TILE + 86 + GAP) + 10;
-    if (this.tab === 'music') {
+    if (this.tab === 'nas') {
+      const vids = items.filter((it) => it.kind === 'video');
+      const songs = items.filter((it) => it.kind === 'music');
+      const vh = Math.round(TILE * 9 / 16);
+      vids.forEach((it, i) => {
+        const c = i % COLS, r = Math.floor(i / COLS);
+        tiles.push({ key: `i:${it.id}`, kind: 'tile', data: it, i: i + folders.length, thumbH: vh, x: PAD + c * (TILE + GAP), y: y + r * (vh + 86 + GAP), w: TILE, h: vh + 70, action: () => this.cb.onPlayVideo(it) });
+      });
+      if (vids.length) y += Math.ceil(vids.length / COLS) * (vh + 86 + GAP);
+      const colW = (W - PAD * 2 - GAP) / 2;
+      songs.forEach((it, i) => {
+        const c = i % 2, r = Math.floor(i / 2);
+        tiles.push({ key: `i:${it.id}`, kind: 'row', data: it, i: i + folders.length + vids.length, x: PAD + c * (colW + GAP), y: y + r * (ROW_H + 10), w: colW, h: ROW_H, action: () => this.cb.onPlayMusic(songs, i, null) });
+      });
+      if (songs.length) y += Math.ceil(songs.length / 2) * (ROW_H + 10);
+    } else if (this.tab === 'music') {
       const colW = (W - PAD * 2 - GAP) / 2;
       items.forEach((it, i) => {
         const c = i % 2, r = Math.floor(i / 2);
@@ -272,7 +315,7 @@ export class LibraryPanel {
       ctx.fillStyle = '#ff9a8a'; ctx.font = font(38); ctx.fillText(t(this.error.key, this.error.vars), W / 2, H / 2 + 40);
     } else if (this.data && !this.tiles.length) {
       ctx.fillStyle = '#9aa3c7'; ctx.font = font(38);
-      ctx.fillText(ellipsize(ctx, t(this.tab === 'karaoke' ? 'lib.emptyKaraoke' : 'lib.empty'), W - 160), W / 2, H / 2 + 40);
+      ctx.fillText(ellipsize(ctx, t(this.tab === 'karaoke' ? 'lib.emptyKaraoke' : this.tab === 'nas' ? 'lib.nasEmpty' : 'lib.empty'), W - 160), W / 2, H / 2 + 40);
     }
 
     // header
@@ -320,6 +363,7 @@ export class LibraryPanel {
     const cy = r.y + r.h / 2 - (hov ? 3 : 0);
     if (r.kind === 'tab') { ctx.font = font(32, 650); ctx.fillText(t(`lib.${r.id}`), r.x + r.w / 2, cy); }
     if (r.kind === 'back') { ctx.font = font(28, 600); ctx.fillText(t('lib.back'), r.x + r.w / 2, cy); }
+    if (r.kind === 'add' || r.kind === 'info') { ctx.font = font(28, 600); ctx.fillStyle = r.kind === 'add' ? '#ffb35c' : '#9aa3c7'; ctx.fillText(this.addLabel(), r.x + r.w / 2, cy); }
     if (r.kind === 'close') {
       ctx.lineWidth = 5; ctx.lineCap = 'round';
       const c = r.x + r.w / 2, s = 13;
