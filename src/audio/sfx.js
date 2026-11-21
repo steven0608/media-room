@@ -93,6 +93,13 @@ export class Sfx {
     }
   }
 
+  /** A drop touching the lake: a soft, falling plink, pitched a little differently each time. */
+  drop() {
+    const ctx = this._ctx();
+    const f = 900 + Math.random() * 500;
+    this._tone(f, ctx.currentTime, 0.22, { type: 'sine', vol: 0.05, glideTo: f * 0.45 });
+  }
+
   star(i) {
     const ctx = this._ctx();
     const notes = [523, 659, 784, 1047, 1319];

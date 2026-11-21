@@ -10,19 +10,19 @@ const P = CONFIG.palette;
 export const PRESETS = {
   idle: {
     sky: 1.0, stars: 1.0, moon: 1.0, tide: 0.15, glow: 0.25, motes: 0.8, deck: 1.0,
-    screen: 0.55, screenGlass: 0.85, stage: 0, cones: 0, accent: P.amber, ambience: 1, lanterns: 1,
+    screen: 0.55, screenGlass: 0.85, stage: 0, cones: 0, accent: P.amber, ambience: 1, lanterns: 1, aurora: 0.35, ring: 0.35,
   },
   music: {
     sky: 1.0, stars: 1.0, moon: 1.0, tide: 1.0, glow: 1.0, motes: 1.0, deck: 0.9,
-    screen: 0.7, screenGlass: 0.9, stage: 0, cones: 0, accent: P.cyan, ambience: 0.35, lanterns: 0.75,
+    screen: 0.7, screenGlass: 0.9, stage: 0, cones: 0, accent: P.cyan, ambience: 0.35, lanterns: 0.75, aurora: 1, ring: 1,
   },
   cinema: {
     sky: 0.35, stars: 0.12, moon: 0.25, tide: 0.0, glow: 0.0, motes: 0.0, deck: 0.18,
-    screen: 1.0, screenGlass: 1.0, stage: 0, cones: 0, accent: P.amber, ambience: 0, lanterns: 0.12,
+    screen: 1.0, screenGlass: 1.0, stage: 0, cones: 0, accent: P.amber, ambience: 0, lanterns: 0.12, aurora: 0, ring: 0,
   },
   karaoke: {
     sky: 0.7, stars: 0.8, moon: 0.6, tide: 0.55, glow: 0.7, motes: 1.0, deck: 0.7,
-    screen: 1.0, screenGlass: 1.0, stage: 1, cones: 1, accent: P.magenta, ambience: 0, lanterns: 0.45,
+    screen: 1.0, screenGlass: 1.0, stage: 1, cones: 1, accent: P.magenta, ambience: 0, lanterns: 0.45, aurora: 0.5, ring: 0.8,
   },
 };
 

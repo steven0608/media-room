@@ -137,6 +137,7 @@ export function createDeck() {
           const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
           halo.position.copy(c);
           halo.scale.setScalar(1.3);
+          halo.userData.baseScale = 1.3;
           halos.push(halo);
         }
       });
@@ -154,7 +155,7 @@ export function createDeck() {
   return {
     group,
     get loaded() { return !!model; },
-    update(t, s, screenColor, micLevel = 0) {
+    update(t, s, screenColor, micLevel = 0, bass = 0) {
       live.time.value = t;
       live.light.value = s.deck;
       live.lanterns.value = s.lanterns ?? 1;
@@ -166,9 +167,9 @@ export function createDeck() {
 
       // lanterns: a gentle candle-like breathing, scaled by the mode
       const flicker = 0.92 + 0.05 * Math.sin(t * 2.3) + 0.03 * Math.sin(t * 7.1);
-      const lv = (s.lanterns ?? 1) * flicker;
+      const lv = (s.lanterns ?? 1) * flicker * (1 + bass * 0.45); // and they breathe with the bass
       paperMat.color.setRGB(1.0 * (0.25 + 0.85 * lv), 0.72 * (0.25 + 0.85 * lv), 0.42 * (0.25 + 0.85 * lv));
-      for (const h of halos) h.material.opacity = 0.9 * lv;
+      for (const h of halos) { h.material.opacity = Math.min(1, 0.9 * lv); h.scale.setScalar(h.userData.baseScale * (1 + bass * 0.25)); }
 
       ringMat.color.copy(s.accent).multiplyScalar(0.5 + s.glow * 0.8 + micLevel * s.stage);
       ring.material.opacity = Math.max(0.15, s.deck);

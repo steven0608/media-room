@@ -8,6 +8,10 @@ import { createSky } from './room/sky.js';
 import { createLake } from './room/lake.js';
 import { createDeck } from './room/deck.js';
 import { createMotes } from './room/motes.js';
+import { createAurora } from './room/aurora.js';
+import { createSoundRing } from './room/soundRing.js';
+import { createMeteors } from './room/meteors.js';
+import { Spectrum } from './audio/spectrum.js';
 import { createScreen } from './room/screen.js';
 import { createReeds } from './room/reeds.js';
 import { createEnvironment, createMic } from './room/environment.js';
@@ -45,14 +49,19 @@ camera.position.set(0, CONFIG.seatedEyeHeight, 0);
 rig.add(camera);
 
 const room = new RoomState();
+const engine = new AudioEngine();
+const spectrum = new Spectrum(engine); // the sound, shaped for the visuals (shared by everything that dances)
 const sky = createSky(room);
-const lake = createLake();
+const lake = createLake(spectrum);
+const aurora = createAurora(spectrum);
+const soundRing = createSoundRing(spectrum);
+const meteors = createMeteors();
 const deck = createDeck();
 const motes = createMotes();
 const screen = createScreen(renderer);
 const reeds = createReeds();
 const environment = createEnvironment();
-scene.add(sky.group, environment.group, lake.mesh, deck.group, motes.points, reeds.mesh, screen.group);
+scene.add(sky.group, aurora.mesh, meteors.group, environment.group, lake.mesh, soundRing.group, deck.group, motes.points, reeds.mesh, screen.group);
 
 // The karaoke microphone rides on your right controller (grip space) in VR.
 const mic = createMic();
@@ -63,7 +72,6 @@ for (let i = 0; i < 2; i++) {
 }
 
 // ---------------------------------------------------------------- audio + input
-const engine = new AudioEngine();
 const sfx = new Sfx(engine);
 const beat = new BeatDetector(CONFIG.beat);
 const pointer = new PointerSystem({ renderer, camera, rig, canvas, sfx });
@@ -91,6 +99,26 @@ const library = new LibraryPanel({
 });
 library.group.position.y = -0.06;
 ui.add(library.group);
+
+// Touch the water: point at the lake and pull the trigger for ripples (hold and sweep to draw
+// them); the fireflies swarm to where you touch. VR only, so desktop drag-to-look still works.
+const waterTouch = new THREE.Mesh(new THREE.PlaneGeometry(120, 120).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+waterTouch.position.y = CONFIG.waterY + 0.05;
+scene.add(waterTouch);
+let lastDrop = 0;
+const touchWater = (hit, strength) => {
+  const { x, z } = hit.point;
+  if (Math.hypot(x, z) < CONFIG.deckRadius + 0.3) return false; // that is the deck, not water
+  lake.touch(x, z, t, strength);
+  motes.attractTo(x, CONFIG.waterY + 0.6, z, 1);
+  return true;
+};
+pointer.add(waterTouch, {
+  onDown: (hit, p) => { if (hit && touchWater(hit, 1)) { sfx.drop(); lastDrop = t; pointer.haptic(p, 0.35, 20); } },
+  onMove: (hit, p) => { if (p.pressed && hit && t - lastDrop > 0.14 && touchWater(hit, 0.7)) { lastDrop = t; pointer.haptic(p, 0.15, 8); } },
+  onUp: () => motes.attractTo(0, 0, 0, 0),
+  onLeave: () => motes.attractTo(0, 0, 0, 0),
+});
 
 // Buttons drawn on the big screen (Music: "Sing this", "Watch video").
 const screenUv = (hit) => ({ x: hit.uv.x * 1280, y: (1 - hit.uv.y) * 720 });
@@ -492,22 +520,29 @@ renderer.setAnimationLoop((now) => {
   const s = room.state;
   const mediaOn = (mode === 'music' && music.playing) || (mode === 'cinema' && cinema.playing) || (mode === 'karaoke' && karaoke.playing);
   const bands = engine.update(dt);
+  let hit = 0;
   if (mediaOn && mode !== 'cinema') {
-    const hit = beat.update(engine.bassFlux(), t);
+    hit = beat.update(engine.bassFlux(), t);
     if (hit) lake.ripple(t, hit);
   } else if (!mediaOn) {
     for (const k of ['bass', 'mid', 'treble']) bands[k] *= 1 - Math.min(1, dt * 2);
   }
+  const dancing = mediaOn && mode !== 'cinema';
+  spectrum.update(dt, dancing, hit);
+  waterTouch.visible = renderer.xr.isPresenting && mode !== 'cinema';
 
   const pxScale = renderer.xr.isPresenting ? 2.2 : renderer.domElement.height / 900;
   screen.update(t, dt, s, mode === 'cinema' ? 0.6 : 0.3);
   const spill = mode === 'cinema' || mode === 'karaoke' ? screen.light : black;
   sky.update(t, s, pxScale);
-  lake.update(t, s, bands, spill);
-  deck.update(t, s, spill, karaoke.micLevel || 0);
+  lake.update(t, s, bands, spill, dancing);
+  aurora.update(t, s, dancing);
+  soundRing.update(t, s, dancing);
+  meteors.update(t, dt, s, camera, hit, dancing);
+  deck.update(t, s, spill, karaoke.micLevel || 0, dancing ? spectrum.range(0, 0.15) : 0);
   environment.update(t, s);
   mic.update(renderer.xr.isPresenting && mode === 'karaoke', s.accent, karaoke.micLevel || 0);
-  motes.update(t, s, bands, pxScale);
+  motes.update(t, s, bands, pxScale, spectrum.pulse);
   reeds.update(t, dt, mediaOn ? s : { ...s, glow: s.glow * 0.25 }, engine);
   music.update(dt, mode === 'music');
   cinema.update(dt, mode === 'cinema');
@@ -530,6 +565,6 @@ addEventListener('resize', () => {
 });
 
 // Desktop testing hooks (used by automated checks; harmless otherwise)
-window.__room = { connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
+window.__room = { spectrum, aurora, soundRing, meteors, motes, connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
 
 boot();

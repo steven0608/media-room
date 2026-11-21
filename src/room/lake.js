@@ -10,6 +10,8 @@ import { MOON_DIR } from './sky.js';
 
 const P = CONFIG.palette;
 const MAX_RIPPLES = 6;
+const MAX_TOUCH = 5;   // ripples you make by pointing at the water
+const EQ_HALF = THREE.MathUtils.degToRad(CONFIG.screen.arcDegrees) * 0.92 / 2;
 
 function polarDisk(inner, outer, rings, segments) {
   const pos = [];
@@ -34,15 +36,20 @@ function polarDisk(inner, outer, rings, segments) {
   return g;
 }
 
-export function createLake() {
+export function createLake(spectrum) {
   const ripples = Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector2(-100, 0));
   let nextRipple = 0;
+  const touches = Array.from({ length: MAX_TOUCH }, () => new THREE.Vector4(0, 0, -100, 0));
+  let nextTouch = 0;
 
   const uniforms = {
     time: { value: 0 },
     bass: { value: 0 }, mid: { value: 0 }, treble: { value: 0 },
     tide: { value: 0 }, glow: { value: 0 }, skyBright: { value: 1 }, moonA: { value: 1 },
     ripples: { value: ripples },
+    touches: { value: touches },
+    spec: { value: spectrum.specTex },
+    ringGlow: { value: 0 }, eqGlow: { value: 0 },
     accent: { value: new THREE.Color(P.cyan) },
     accent2: { value: new THREE.Color(P.magenta) },
     water: { value: new THREE.Color(P.water) },
@@ -59,6 +66,18 @@ export function createLake() {
   const HEIGHT = /* glsl */ `
     uniform float time, bass, tide, deckR, swell, speed, life;
     uniform vec2 ripples[${MAX_RIPPLES}];
+    uniform vec4 touches[${MAX_TOUCH}];
+    float touchAt(vec2 p) {
+      float g = 0.0;
+      for (int i = 0; i < ${MAX_TOUCH}; i++) {
+        float age = time - touches[i].z;
+        if (age > 0.0 && age < 3.0) {
+          float k = (length(p - touches[i].xy) - age * 2.6) / (0.18 + age * 0.22);
+          g += touches[i].w * exp(-k * k) * (1.0 - age / 3.0);
+        }
+      }
+      return g;
+    }
     float ringAt(float d) {
       float g = 0.0;
       for (int i = 0; i < ${MAX_RIPPLES}; i++) {
@@ -77,7 +96,9 @@ export function createLake() {
               + 0.012 * sin((p.x + p.y) * 1.3 + time * 1.3);
       h += tide * bass * swell * sin(d * 0.5 - time * 2.1) * exp(-d * 0.03);
       ring = ringAt(d) * tide;
-      h += ring * 0.32;
+      float touch = touchAt(p);
+      ring += touch * 0.8;
+      h += ring * 0.32 + touch * 0.06;
       return h * fall;
     }`;
 
@@ -105,7 +126,8 @@ export function createLake() {
       }`,
     fragmentShader: /* glsl */ `
       uniform float time, mid, treble, glow, skyBright, moonA, tide;
-      uniform float bass;
+      uniform float bass, ringGlow, eqGlow;
+      uniform sampler2D spec;
       #define bass_ bass
       uniform vec3 accent, accent2, water, top, horizon, moonDir, screenColor;
       varying vec3 vWorld;
@@ -149,6 +171,20 @@ export function createLake() {
         float sp = hash(floor(vWorld.xz * 5.0) + floor(time * 9.0));
         col += vec3(1.0) * step(0.982, sp) * treble * glow * (0.3 + crest) * 1.4;
 
+        // reflections: the sound ring around you and the equalizer bars under the screen
+        vec2 wob = N.xz * 0.6;
+        float rr = (vDist + wob.x - 4.4) / 0.4;
+        col += accent * exp(-rr * rr) * ringGlow * 0.22;
+        float ang = atan(vWorld.x + wob.x, -vWorld.z);
+        if (abs(ang) < ${EQ_HALF.toFixed(4)} && vWorld.z < 0.0) {
+          float m = abs(ang) / ${EQ_HALF.toFixed(4)};
+          float lvl = texture2D(spec, vec2(0.03 + m * 0.85, 0.5)).r;
+          float idx = (ang / ${EQ_HALF.toFixed(4)} * 0.5 + 0.5) * 48.0;
+          float stripe = smoothstep(0.34, 0.24, abs(fract(idx) - 0.5));
+          float along = smoothstep(9.1, 8.6, vDist) * smoothstep(5.5, 8.2 - lvl * 1.5, vDist);
+          col += mix(accent, vec3(1.0), 0.3) * stripe * along * (0.15 + lvl) * eqGlow * 0.5;
+        }
+
         col *= 1.0 - smoothstep(55.0, 185.0, vDist); // fade into the dark far away
         gl_FragColor = vec4(col, 1.0);
         #include <colorspace_fragment>
@@ -166,7 +202,14 @@ export function createLake() {
       ripples[nextRipple].set(t, Math.min(1.6, strength));
       nextRipple = (nextRipple + 1) % MAX_RIPPLES;
     },
-    update(t, s, bands, screenColor) {
+    /** A ripple where you point at the water. */
+    touch(x, z, t, strength = 1) {
+      touches[nextTouch].set(x, z, t, strength);
+      nextTouch = (nextTouch + 1) % MAX_TOUCH;
+    },
+    update(t, s, bands, screenColor, playing = false) {
+      uniforms.ringGlow.value = s.ring ?? 0;
+      uniforms.eqGlow.value = (s.ring ?? 0) * (playing ? 1 : 0.3);
       uniforms.time.value = t;
       uniforms.bass.value = bands.bass;
       uniforms.mid.value = bands.mid;
