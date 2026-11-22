@@ -76,6 +76,14 @@ class Link {
     this._send({ t: 'hello', token: body.token });
   }
 
+  /** Stop routing requests to a hub (the demo room answers them instead). */
+  deactivate() {
+    if (!this.active) return;
+    this.active = false;
+    window.fetch = nativeFetch;
+    this.close();
+  }
+
   forget() {
     store.set('link', null);
     this.saved = null;

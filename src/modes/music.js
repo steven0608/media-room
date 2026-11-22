@@ -7,6 +7,7 @@ import { canvasTexture, font, ellipsize, roundRect, drawCover, drawPlaceholder, 
 import { t, onLang, lyricsScript } from '../i18n.js';
 import { link } from '../link.js';
 import { playStream, AUDIO_MIME } from '../mse.js';
+import { demo } from '../demo.js';
 
 const W = 1280, H = 720;
 
@@ -61,7 +62,7 @@ export class MusicMode {
     this.stream = null;
     if (link.active) this.stream = playStream(this.audio, `/stream-audio/${it.id}?t=${startAt || 0}`, AUDIO_MIME, { duration: it.duration ? it.duration - (startAt || 0) : undefined });
     else {
-      this.audio.src = `/media/${it.id}`;
+      this.audio.src = demo.url(`/media/${it.id}`);
       if (startAt) this.audio.currentTime = startAt;
     }
     this.audio.play().catch(() => {});
@@ -276,7 +277,11 @@ export class MusicMode {
     else if (k?.job?.state === 'running') pill('sing', t('action.preparing', { pct: Math.round(k.job.progress * 100) }), '#ff4fa3', false, k.job.progress);
     else if (k?.job?.state === 'queued') pill('sing', t('action.queued'), '#ff4fa3', false, 0);
     else if (k?.job?.state === 'failed') pill('prepare', t('action.failed'), '#ff7a7a');
-    else if (k?.canPrepare) pill('prepare', t('action.sing'), '#ff4fa3');
+    else {
+      // any song with timed lyrics can be sung right away; a full karaoke version needs the PC's tools
+      if (k?.quick) pill('quick', t('action.singAlong'), '#ff4fa3');
+      if (k?.canPrepare) pill('prepare', t(k?.quick ? 'action.makeKaraoke' : 'action.sing'), k?.quick ? '#c77dff' : '#ff4fa3');
+    }
     const vids = this.match?.videos || [];
     if (vids.length) pill('video', t('action.video'), '#ffb35c');
     ctx.textBaseline = 'alphabetic';

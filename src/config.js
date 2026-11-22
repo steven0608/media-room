@@ -3,6 +3,8 @@ export const CONFIG = {
   // "Connect anywhere": the meeting point the public room page uses to find your hub.
   // Filled in when the meeting point is deployed (see signal/). Empty = home-network only.
   remote: { signal: 'https://media-room-signal.media-room-signal.workers.dev' },
+  // Where new users get the hub — short enough to type on a PC (shown in the headset).
+  getHubAddress: 'stillwaterhub.pages.dev',
 
   // Where you sit: the deck's centre, eye height for the desktop preview.
   seatedEyeHeight: 1.2,

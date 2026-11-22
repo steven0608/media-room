@@ -10,6 +10,7 @@ import { CONFIG } from '../config.js';
 import { t, onLang, lyricsScript } from '../i18n.js';
 import { link } from '../link.js';
 import { playStream } from '../mse.js';
+import { demo } from '../demo.js';
 
 export class CinemaMode {
   constructor({ engine, sfx, screen, pointer }) {
@@ -94,7 +95,7 @@ export class CinemaMode {
   _aspect() {
     const a = this.video.videoWidth && this.video.videoHeight ? this.video.videoWidth / this.video.videoHeight : 16 / 9;
     this.aspect = a;
-    this.screen.setTexture(this.texture, a);
+    if (this.active) this.screen.setTexture(this.texture, a); // a film loading in the background stays off the screen
   }
 
   async play(item) {
@@ -129,7 +130,7 @@ export class CinemaMode {
     this.stream?.stop();
     this.stream = null;
     if (link.active) this.stream = playStream(this.video, `${this.info.url}?t=${t.toFixed(2)}`, this.info.mime, { duration: this.info.duration - t });
-    else this.video.src = direct ? this.info.url : `${this.info.url}?t=${t.toFixed(2)}`;
+    else this.video.src = demo.url(direct ? this.info.url : `${this.info.url}?t=${t.toFixed(2)}`);
     if (direct && t) this.video.currentTime = t;
     if (!direct && this.subIndex >= 0) this._loadTrack();
   }
@@ -183,7 +184,7 @@ export class CinemaMode {
       tr.kind = 'subtitles';
       const src = sub.lyrics ? `${sub.url}?script=${lyricsScript()}` : sub.url;
       if (link.active) link.objectUrl(src).then((u) => { if (u) tr.src = u; });
-      else tr.src = src;
+      else tr.src = demo.url(src);
       tr.default = true;
       this.video.appendChild(tr);
       tr.track.mode = 'hidden';
@@ -277,6 +278,7 @@ export class CinemaMode {
   }
 
   update(dt, active) {
+    this.active = active;
     this.group.visible = active;
     if (!active) return;
     this.controlsT -= dt;

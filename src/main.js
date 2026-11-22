@@ -30,6 +30,8 @@ import { t as tr, onLang, toggleLang, applyDom, num, errorText } from './i18n.js
 import { link } from './link.js';
 import { createHands } from './ui/hands.js';
 import { createLife } from './room/life.js';
+import { demo } from './demo.js';
+import { makeButton } from './ui/widgets.js';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -143,6 +145,10 @@ music.onAction = async (key) => {
   if (key === 'sing' && m?.karaoke?.ready) {
     setMode('karaoke');
     karaoke.start({ id: m.karaoke.id });
+  } else if (key === 'quick' && m?.karaoke?.quick) {
+    music.audio.pause();
+    setMode('karaoke');
+    karaoke.start({ id: m.karaoke.quick });
   } else if (key === 'prepare' && music.current) {
     // Queue this song for karaoke; the screen shows progress and says when it's ready.
     try { m.karaoke = await api(`/api/karaoke/prepare/${music.current.id}`, { method: 'POST' }); } catch { /* shown as unavailable */ }
@@ -286,6 +292,14 @@ function setMode(m) {
   updateHud();
 }
 
+/** Pause everything (system menu opened, page hidden). Play resumes with the usual controls. */
+function pauseAll() {
+  if (music.playing) music.pause();
+  if (cinema.playing) cinema.pause();
+  karaoke.pause();
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) pauseAll(); });
+
 function togglePlay() {
   if (mode === 'cinema') { if (!cinema.toggle()) library.open('video'); }
   else if (mode === 'karaoke') { if (!karaoke.toggle()) library.open('karaoke'); }
@@ -302,7 +316,8 @@ music.onChange = () => {
 cinema.onChange = () => {
   consoleUi.setPlaying(cinema.playing);
   if (cinema.info) consoleUi.setNowPlaying(cinema.info.title);
-  screen.setTexture(cinema.texture, cinema.aspect || 16 / 9);
+  // only while in Cinema: leaving it pauses the film, and that must not cover the karaoke board or music
+  if (mode === 'cinema') screen.setTexture(cinema.texture, cinema.aspect || 16 / 9);
   sfx.mediaPlaying = music.playing || cinema.playing;
 };
 karaoke.onChange = () => consoleUi.setPlaying(karaoke.playing);
@@ -394,6 +409,8 @@ async function enterVR() {
     setFrameRate();
     session.addEventListener('end', () => { xrSession = null; placeConsole(false); ui.position.set(0, CONFIG.seatedEyeHeight, 0); ui.rotation.set(0, 0, 0); rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0); showWelcome(); });
     renderer.xr.getReferenceSpace()?.addEventListener?.('reset', () => { placeFrames = 5; });
+    // Quest system menu (or the headset taken off): pause what's playing, as Meta's store requires.
+    session.addEventListener('visibilitychange', () => { if (session.visibilityState !== 'visible') pauseAll(); });
   } catch (e) {
     welcomeNote = { key: 'welcome.vrFailed', vars: { msg: e.message } };
     updateWelcome();
@@ -427,12 +444,13 @@ let vrState = 'checking'; // checking | ok | none
 let welcomeNote = null;    // { key, vars }
 function updateHud() {
   const c = libraryCounts;
+  if (demo.active) { $('hud-status').textContent = `${tr(`mode.${mode}`)} · ${tr('demo.hud')}`; return; }
   const via = link.active ? ` · ${tr(link.state === 'open' && link.route ? `link.route.${link.route}` : `link.state.${link.state}`)}` : '';
   $('hud-status').textContent = `${tr(`mode.${mode}`)}${c ? ` · ${tr('hud.counts', { music: num(c.music), video: num(c.video) })}` : ''}${via}`;
 }
 function updateWelcome() {
   const c = libraryCounts;
-  if (c) $('welcome-sub').textContent = c.music || c.video ? tr('welcome.counts', { music: num(c.music), video: num(c.video) }) : tr('welcome.empty');
+  if (c) $('welcome-sub').textContent = demo.active ? tr('demo.welcome', { music: num(c.music), video: num(c.video) }) : c.music || c.video ? tr('welcome.counts', { music: num(c.music), video: num(c.video) }) : tr('welcome.empty');
   $('enter-vr').textContent = tr(vrState === 'ok' ? 'welcome.enterVr' : vrState === 'none' ? 'welcome.noVr' : 'welcome.checkingVr');
   $('welcome-note').textContent = welcomeNote ? tr(welcomeNote.key, welcomeNote.vars) : '';
 }
@@ -511,6 +529,7 @@ async function boot() {
   relang();
   $('preview').addEventListener('click', startPreview);
   $('enter-vr').addEventListener('click', enterVR);
+  for (const id of ['pair-demo', 'welcome-demo']) $(id).addEventListener('click', () => { $(id).blur(); $('welcome-demo').classList.add('hidden'); startDemo(); });
   const vrOk = !!navigator.xr && (await navigator.xr.isSessionSupported('immersive-vr').catch(() => false));
   vrState = vrOk ? 'ok' : 'none';
   if (!vrOk) welcomeNote = { key: window.isSecureContext ? 'welcome.openInQuest' : 'welcome.needHttps' };
@@ -519,6 +538,7 @@ async function boot() {
   if (how.mode === 'link') link.onState(() => updateHud());
   // The installed app: straight into VR (tapping the app icon counts as the click VR needs).
   if (APP_MODE && vrOk) await enterVR();
+  if (params.has('demo')) return startDemo();
   if (how.mode === 'none') return problem('link.noHub');
   connectFlow();
 }
@@ -562,14 +582,13 @@ function busy(key) {
   if (!inVR()) showWelcome();
 }
 function problem(key, vars) {
+  $('welcome-demo').classList.remove('hidden'); // no hub reachable: the demo is a way in
   if (inVR()) connectUi.status(key, { vars, retry: key !== 'link.noHub' });
   welcomeNote = null;
   $('welcome-sub').textContent = tr(key, vars);
   if (!inVR()) showWelcome();
 }
-function askPair() {
-  if (!inVR()) return pairingUi();
-  connectUi.pair(async (code) => {
+async function pairWith(code) {
     const device = /OculusBrowser|Quest/i.test(navigator.userAgent) ? 'Quest headset' : 'Browser';
     try {
       if (link.active) await link.pair(code, device);
@@ -582,9 +601,32 @@ function askPair() {
       throw e;
     }
     connectFlow();
-  });
+}
+function askPair() {
+  if (!inVR()) return pairingUi();
+  // never paired on this headset: say hello first (pair · get the hub · try the demo)
+  if (link.active && !link.saved?.hubId) connectUi.welcome(pairWith);
+  else connectUi.pair(pairWith);
 }
 connectUi.onRetry(() => connectFlow());
+connectUi.onDemo(() => startDemo());
+
+// ---------------------------------------------------------------- the demo room (no hub needed)
+async function startDemo() {
+  link.deactivate();
+  await demo.start();
+  sfx.select?.();
+  demoBadge.group.visible = true;
+  $('hud-demo')?.classList.remove('hidden');
+  await connectFlow();
+  if (inVR()) { setMode('music'); library.open?.('music'); }
+}
+// In the demo, a button near the console leads back to connecting your own media.
+const demoBadge = makeButton(pointer, sfx, { w: 0.3, h: 0.05, label: tr('demo.badge'), accent: CONFIG.palette.magenta, onClick: () => location.reload() });
+demoBadge.group.position.set(0, -0.19, 0.01);
+demoBadge.group.visible = false;
+consoleUi.group.add(demoBadge.group);
+onLang(() => demoBadge.setLabel(tr('demo.badge')));
 
 // ---------------------------------------------------------------- frame loop
 const timer = new THREE.Timer();

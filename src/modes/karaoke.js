@@ -3,12 +3,17 @@
 //   - a pitch lane above shows the melody as bars and your voice as a glowing comet
 //   - at the end, stars and a title (generous, octaves don't matter — kids can sing high)
 // Songs are prepared on the PC by tools/karaoke_prep.py (instrumental + timed lyrics + melody).
+// Quick sing-along songs (any song with timed lyrics, see hub/quick.js) have no melody: the song
+// plays with the singer turned down (audio/vocalCut.js), and the score is how much of each line
+// you sang.
 import { api, store } from '../api.js';
 import { Mic } from '../audio/pitch.js';
 import { VoiceMonitor } from '../audio/voice.js';
 import { canvasTexture, font, ellipsize, roundRect, fmtTime } from '../ui/text.js';
 import { t as tr, onLang, lyricsScript } from '../i18n.js';
 import { link } from '../link.js';
+import { demo } from '../demo.js';
+import { createVocalCut } from '../audio/vocalCut.js';
 
 const W = 1280, H = 720;
 const WINDOW = 6;       // seconds of melody visible in the pitch lane
@@ -84,8 +89,20 @@ export class KaraokeMode {
     this.offset = (this.song.offset || 0) + store.get('karaokeOffset', 0);
     if (!this.autosing && await this.mic.open()) this.voice.connect(this.mic.source);
     this.engine.attach(this.audio);
+    // the voice reducer sits between this song and the room's sound (passes straight through when off)
+    if (!this.cut) {
+      this.cut = createVocalCut(this.engine.ctx);
+      const src = this.engine.sources.get(this.audio);
+      src.disconnect();
+      src.connect(this.cut.input);
+      this.cut.output.connect(this.engine.analyser);
+    }
+    this.quick = !!this.song.quick;
+    this.lineIdx = 0;
+    this.cut.reset();
+    this.cut.set(this.quick && store.get('vocalCut', true));
     const inst = `/karaoke/${item.id}/instrumental.m4a`;
-    this.audio.src = link.active ? await link.objectUrl(inst) : inst;
+    this.audio.src = link.active ? await link.objectUrl(inst) : demo.url(inst);
     this.audio.currentTime = 0;
     this.audio.pause();
     // "3, 2, 1, Sing!" with sound, so everyone (kids too) knows when it starts.
@@ -113,10 +130,43 @@ export class KaraokeMode {
     const ratio = this.total ? this.hits / this.total : 0;
     this.sang = this.hits > 20;
     // Generous on purpose: this is a family game, not a singing exam.
-    this.stars = !this.sang ? 0 : ratio >= 0.55 ? 5 : ratio >= 0.4 ? 4 : ratio >= 0.27 ? 3 : ratio >= 0.14 ? 2 : 1;
-    this.percent = Math.min(100, Math.round(ratio * 125 + (this.sang ? 15 : 0)));
+    if (this.quick) { // singing along through the lines (no pitch to match)
+      this.stars = !this.sang ? 0 : ratio >= 0.7 ? 5 : ratio >= 0.55 ? 4 : ratio >= 0.4 ? 3 : ratio >= 0.25 ? 2 : 1;
+      this.percent = Math.min(100, Math.round(ratio * 110 + (this.sang ? 8 : 0)));
+    } else {
+      this.stars = !this.sang ? 0 : ratio >= 0.55 ? 5 : ratio >= 0.4 ? 4 : ratio >= 0.27 ? 3 : ratio >= 0.14 ? 2 : 1;
+      this.percent = Math.min(100, Math.round(ratio * 125 + (this.sang ? 15 : 0)));
+    }
     this.starsShown = 0;
     this.onChange();
+  }
+
+  /** Quick sing-along: no melody, so a line counts while you are singing during it. */
+  _singAlong(t, dt, clock) {
+    const lines = this.song.lines;
+    while (this.lineIdx < lines.length && lines[this.lineIdx].end < t) this.lineIdx++;
+    const line = lines[this.lineIdx] && lines[this.lineIdx].t <= t ? lines[this.lineIdx] : null;
+    let voice = null;
+    if (this.autosing) {
+      voice = line ? { midi: 62 + Math.sin(clock * 5) * 3 } : null;
+      this.micLevel = line ? 0.6 + 0.3 * Math.sin(clock * 9) : 0.05;
+    } else if (this.mic.ready && !this.audio.paused) {
+      voice = this.mic.read();
+      this.micLevel = this.mic.level;
+    }
+    if (!this.audio.paused) {
+      this.cut.listen(true);
+      const singing = !!voice || this.micLevel > 0.08;
+      let hit = false;
+      if (line) {
+        this.total++;
+        if (singing) { this.hits++; hit = true; this.streak += dt; this.bestStreak = Math.max(this.bestStreak, this.streak); }
+        else this.streak = Math.max(0, this.streak - dt * 3);
+      }
+      if (voice) this.trail.push({ t, midi: (this.lo + this.hi) / 2 + fold(voice.midi - (this.lo + this.hi) / 2), hit });
+      while (this.trail.length && this.trail[0].t < t - 1.6) this.trail.shift();
+    }
+    if (this.frame % 2 === 0) this.draw(t, clock);
   }
 
   /** The time in the song you are hearing right now. */
@@ -158,6 +208,7 @@ export class KaraokeMode {
         const key = `${ci.i}:${n}`;
         if (n >= 1 && n <= 3 && key !== this.lastCue) { this.lastCue = key; this.sfx.count(n); }
       }
+      if (this.quick) return this._singAlong(t, dt, clock);
       const notes = this.song.notes;
       while (this.noteIdx < notes.length && notes[this.noteIdx].t + notes[this.noteIdx].d < t - 0.12) this.noteIdx++;
       const target = notes[this.noteIdx] && notes[this.noteIdx].t - 0.12 <= t ? notes[this.noteIdx] : null;
@@ -310,6 +361,11 @@ export class KaraokeMode {
     ctx.save();
     roundRect(ctx, 40, 50, W - 80, 270, 24);
     ctx.clip();
+    if (this.quick) { // no melody to follow: say what this is, and let your voice glow across the lane
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(201,207,240,0.28)'; ctx.font = font(30, 650);
+      ctx.fillText(tr(this.cut?.on ? 'karaoke.quickLane' : 'karaoke.quickLaneOff'), W / 2, 185);
+    }
     // melody bars
     for (let i = Math.max(0, this.noteIdx - 12); i < this.song.notes.length; i++) {
       const n = this.song.notes[i];
@@ -454,6 +510,7 @@ export class KaraokeMode {
       { key: 'voice+', text: '+', w: 46 },
       { key: 'echo', text: tr(this.voice.echo ? 'karaoke.echoOn' : 'karaoke.echoOff'), w: 0, on: this.voice.echo },
     ];
+    if (this.quick && this.cut) items.push({ key: 'cut', text: tr(this.cut.mono ? 'karaoke.singerMono' : this.cut.on ? 'karaoke.singerLow' : 'karaoke.singerOn'), w: 0, on: this.cut.on });
     ctx.font = font(22, 650);
     ctx.textBaseline = 'middle';
     let x = 44;
@@ -489,6 +546,7 @@ export class KaraokeMode {
     this.sfx.select();
     if (r.key === 'voice-' || r.key === 'voice+') store.set('voiceVolume', this.voice.setVolume(this.voice.volume + (r.key === 'voice+' ? 0.1 : -0.1)));
     else if (r.key === 'echo') { this.voice.setEcho(!this.voice.echo); store.set('voiceEcho', this.voice.echo); }
+    else if (r.key === 'cut' && this.cut && !this.cut.mono) { this.cut.set(!this.cut.on); store.set('vocalCut', this.cut.on); }
   }
 
   _drawScore(clock) {

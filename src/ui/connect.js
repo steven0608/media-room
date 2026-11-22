@@ -1,6 +1,10 @@
 // The in-VR "connect" card: what you see when the app opens straight into VR before the room
-// can reach your hub. It shows "Connecting…", a hub-offline message with Try again, or a
-// number pad to type the 6-digit pairing code — so nothing ever needs the flat browser page.
+// can reach your hub. Views:
+//   welcome  first time: Pair with my hub · Get the hub · Try the demo
+//   gethub   where to download the hub (a short address to type on the PC), three steps
+//   pair     the number pad for the 6-digit code (with Back and Try the demo)
+//   status   "Connecting…", or a problem with Try again (and Try the demo)
+// so nothing ever needs the flat browser page.
 import * as THREE from 'three';
 import { makeButton, makePlate } from './widgets.js';
 import { canvasTexture, font, ellipsize, roundRect } from './text.js';
@@ -25,6 +29,8 @@ export function createConnectPanel({ pointer, sfx }) {
   const state = { view: 'status', msg: 'link.connecting', vars: null, digits: '', error: '', busy: false };
   let onCode = async () => {};
   let onRetry = () => {};
+  let onDemo = () => {};
+  let pairFn = null;
 
   // number pad: 1 2 3 / 4 5 6 / 7 8 9 / ⌫ 0 Pair
   const pad = new THREE.Group();
@@ -47,8 +53,39 @@ export function createConnectPanel({ pointer, sfx }) {
   const okBtn = buttons.find((x) => x.k === 'ok').b;
 
   const retry = makeButton(pointer, sfx, { w: 0.2, h: 0.066, label: t('connect.retry'), accent: P.amber, onClick: () => onRetry() });
-  retry.group.position.set(0, -0.12, 0);
+  retry.group.position.set(-0.11, -0.12, 0);
   group.add(retry.group);
+
+  // the choices (welcome / get the hub) and the small row under the number pad
+  const B = (label, accent, x, y, w, onClick, icon) => {
+    const b = makeButton(pointer, sfx, { w, h: 0.066, label: t(label), accent, icon, onClick });
+    b.group.position.set(x, y, 0);
+    b.key = label;
+    group.add(b.group);
+    return b;
+  };
+  const toPair = () => { if (pairFn) api.pair(pairFn); };
+  const choice = {
+    pair: B('connect.havePair', P.amber, 0, -0.03, 0.4, toPair),
+    get: B('connect.getHub', P.cyan, 0, -0.115, 0.4, () => show('gethub')),
+    demo: B('connect.demo', P.magenta, 0, -0.2, 0.4, () => onDemo()),
+  };
+  const ghub = {
+    pair: B('connect.pairNow', P.amber, -0.16, -0.2, 0.15, toPair),
+    demo: B('connect.demo', P.magenta, 0, -0.2, 0.15, () => onDemo()),
+    back: B('connect.back', P.cyan, 0.16, -0.2, 0.15, () => show('welcome')),
+  };
+  const under = {
+    back: B('connect.back', P.cyan, -0.09, -0.3, 0.16, () => show('welcome')),
+    demo: B('connect.demo', P.magenta, 0.09, -0.3, 0.16, () => onDemo()),
+  };
+  const statusDemo = B('connect.demo', P.magenta, 0.11, -0.12, 0.2, () => onDemo());
+  const allExtra = [...Object.values(choice), ...Object.values(ghub), ...Object.values(under), statusDemo];
+  function show(view) {
+    Object.assign(state, { view, error: '' });
+    group.visible = true;
+    draw();
+  }
 
   function press(k) {
     if (state.busy) return;
@@ -89,11 +126,25 @@ export function createConnectPanel({ pointer, sfx }) {
     c.beginPath(); c.arc(W / 2 + 12, 54, 22, 0, Math.PI * 2); c.fill();
     c.fillStyle = '#e8ecff';
     c.font = font(58, 750);
-    c.fillText(state.view === 'pair' ? t('connect.pairTitle') : t('app.name'), W / 2, 140);
+    const title = { pair: t('connect.pairTitle'), welcome: t('connect.welcomeTitle'), gethub: t('connect.getTitle') }[state.view] || t('app.name');
+    c.fillText(title, W / 2, 140);
     c.fillStyle = '#9aa3c7';
     c.font = font(34);
-    const msg = state.view === 'pair' ? (state.busy ? t('link.connecting') : t('connect.pairSub')) : t(state.msg, state.vars || {});
+    const msg = state.view === 'pair' ? (state.busy ? t('link.connecting') : t('connect.pairSub'))
+      : state.view === 'welcome' ? t('connect.welcomeSub')
+      : state.view === 'gethub' ? t('connect.getSub')
+      : t(state.msg, state.vars || {});
     wrap(c, msg, W / 2, 205, W - 120, 44);
+    if (state.view === 'gethub') {
+      // the address, big, in a box — typed on the PC
+      roundRect(c, 70, 300, W - 140, 104, 22);
+      c.fillStyle = 'rgba(92,225,230,0.12)'; c.fill();
+      c.lineWidth = 2; c.strokeStyle = 'rgba(92,225,230,0.6)'; c.stroke();
+      c.fillStyle = '#ffffff'; c.font = font(44, 750);
+      c.fillText(ellipsize(c, CONFIG.getHubAddress, W - 180), W / 2, 354);
+      c.fillStyle = '#9aa3c7'; c.font = font(28, 500);
+      c.fillText(t('connect.getSteps'), W / 2, 450);
+    }
     if (state.view === 'pair') {
       // six digit slots
       const sw = 104, gap = 18, x0 = W / 2 - (6 * sw + 5 * gap) / 2, y = 300;
@@ -121,12 +172,21 @@ export function createConnectPanel({ pointer, sfx }) {
     head.tex.needsUpdate = true;
     pad.visible = state.view === 'pair';
     retry.group.visible = state.view === 'status' && !!state.retry;
+    for (const b of Object.values(choice)) b.group.visible = state.view === 'welcome';
+    for (const b of Object.values(ghub)) b.group.visible = state.view === 'gethub';
+    for (const b of Object.values(under)) b.group.visible = state.view === 'pair';
+    statusDemo.group.visible = state.view === 'status' && !!state.retry;
+    for (const b of allExtra) b.setLabel(t(b.key));
     okBtn.setLabel(t('pair.button'));
     retry.setLabel(t('connect.retry'));
   }
   onLang(draw);
 
-  return {
+  // Always in front of the room (the big screen's own text must not show through), and solid.
+  group.traverse((o) => { o.renderOrder = 40; if (o.material) o.material.depthTest = false; });
+  plate.material.opacity = 0.96;
+
+  const api = {
     group,
     get visible() { return group.visible; },
     /** Show a message: key from i18n, optional Try again button. */
@@ -138,15 +198,20 @@ export function createConnectPanel({ pointer, sfx }) {
     /** Show the number pad. fn(code) resolves when paired, or throws an Error with a message to show. */
     pair(fn) {
       onCode = fn;
+      pairFn = fn;
       Object.assign(state, { view: 'pair', digits: '', error: '', busy: false });
       group.visible = true;
       draw();
     },
     onRetry(fn) { onRetry = fn; },
+    onDemo(fn) { onDemo = fn; },
+    /** First time here: Pair with my hub · Get the hub · Try the demo. fn = what Pair does with a code. */
+    welcome(fn) { pairFn = fn; onCode = fn; show('welcome'); },
     press, // same as pointing at a key (used by tests)
     hide() { group.visible = false; },
     update() { if (group.visible && state.view === 'status' && state.msg === 'link.connecting') draw(); },
   };
+  return api;
 }
 
 function wrap(c, text, x, y, maxW, lh) {

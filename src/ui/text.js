@@ -3,6 +3,7 @@
 // with no font files to download.
 import * as THREE from 'three';
 import { link } from '../link.js';
+import { demo } from '../demo.js';
 
 export const FONT = '"Noto Sans SC", "Noto Sans CJK SC", "Noto Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif';
 
@@ -83,7 +84,7 @@ export function getImage(url, onLoad) {
     e.img.onload = () => { e.ok = true; for (const w of e.waiters) w(); e.waiters.clear(); };
     e.img.onerror = () => { e.failed = true; e.waiters.clear(); };
     if (link.active && url.startsWith('/')) link.objectUrl(url).then((u) => { if (u) e.img.src = u; else e.failed = true; });
-    else e.img.src = url;
+    else e.img.src = demo.url(url);
     images.set(url, e);
     if (images.size > 600) images.delete(images.keys().next().value);
   }
