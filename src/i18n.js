@@ -24,7 +24,7 @@ const STRINGS = {
   'pair.button': ['Pair', '配对'],
   'pair.digit': ['Digit {n}', '第 {n} 位'],
   'err.wrong-code': ['That code is not right. Check the code on the PC.', '配对码不正确，请核对电脑上显示的配对码。'],
-  'err.too-many': ['Too many attempts — a new code is shown on the PC.', '尝试次数过多 —— 电脑上已显示新的配对码。'],
+  'err.too-many': ['Too many attempts. Wait 15 minutes, or check the code on the PC.', '尝试次数过多。请等 15 分钟，或查看电脑上的配对码。'],
   'hud.keys': [
     'Drag to look · Click to use · <kbd>1</kbd> Music <kbd>2</kbd> Cinema <kbd>3</kbd> Karaoke · <kbd>Space</kbd> play/pause · <kbd>L</kbd> library · <kbd>Esc</kbd> menu',
     '拖动查看 · 点击操作 · <kbd>1</kbd> 音乐 <kbd>2</kbd> 影院 <kbd>3</kbd> K歌 · <kbd>空格</kbd> 播放/暂停 · <kbd>L</kbd> 媒体库 · <kbd>Esc</kbd> 菜单',
@@ -38,6 +38,8 @@ const STRINGS = {
   'link.failed': ["Couldn't reach your hub: {msg}", '无法连接到你的电脑：{msg}'],
   'link.noHub': ['Open this page from your Media Room hub, or set up “connect anywhere”.', '请从 Media Room 电脑端打开此页面，或先设置「随处连接」。'],
   'link.blocked': ["Your hub was found, but the connection didn't get through. Try again in a moment.", '找到了你的电脑，但连接没有成功。请稍后再试。'],
+  'hands.hint1': ['Pinch to select · or touch a button', '捏合手指选择 · 或直接触碰按钮'],
+  'hands.hint2': ['Show your palm to bring the menu to you', '手掌朝向自己，菜单就会来到面前'],
   'connect.retry': ['Try again', '重试'],
   'connect.pairTitle': ['Pair this headset', '配对此头显'],
   'connect.pairSub': ['Type the 6-digit code shown in the Media Room Hub window on your PC', '输入电脑上 Media Room Hub 窗口中的 6 位配对码'],

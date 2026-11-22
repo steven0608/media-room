@@ -1,11 +1,19 @@
 // One input system for both worlds:
 //   desktop – the mouse is a ray from the camera; drag on empty space to look around
 //   VR      – each controller is a ray; trigger (or grip) = press, thumbsticks for scroll/turn
+//   hands   – pinch = press along the hand's ray; or touch a button with your index fingertip
+//             (a "poke" pointer: a 6 cm ray along the finger, fed by ui/hands.js)
 // Anything clickable registers a mesh with handlers in mesh.userData.ui:
 //   { onEnter, onLeave, onDown(hit, ptr), onMove(hit, ptr), onUp(hit, ptr), onWheel(dy) }
 import * as THREE from 'three';
 
 const tmpMat = new THREE.Matrix4();
+// Poke: the ray starts POKE_BACK behind the fingertip, so a hit closer than that means the
+// fingertip is touching (or through) the surface. Buttons sink when pressed, so letting go is
+// measured on the finger, not the surface: once it pulls back POKE_PULL from its deepest point.
+// Then it has to pull back POKE_REARM (or slide off) before it can press again: one tap = one click.
+const POKE_BACK = 0.03, POKE_PRESS = 0.029, POKE_PULL = 0.012, POKE_REARM = 0.03, POKE_REACH = 0.07;
+const pokeRay = new THREE.Raycaster();
 
 function visible(o) {
   for (; o; o = o.parent) if (!o.visible) return false;
@@ -65,7 +73,9 @@ export class PointerSystem {
         p.source = e.data;
         p.handedness = e.data.handedness;
         p.active = e.data.targetRayMode === 'tracked-pointer' || e.data.targetRayMode === 'transient-pointer' || !!e.data.hand;
+        p.isHand = !!e.data.hand;
         p.visual.visible = p.active;
+        p.visual.userData.wand.visible = !p.isHand; // your real hand is drawn instead
       });
       ctrl.addEventListener('disconnected', () => { p.active = false; p.visual.visible = false; this._leave(p); });
       ctrl.addEventListener('selectstart', () => this._down(p));
@@ -105,9 +115,27 @@ export class PointerSystem {
     const tip = new THREE.Mesh(new THREE.SphereGeometry(0.009, 12, 8), new THREE.MeshBasicMaterial({ color: 0x5ce1e6 }));
     tip.position.z = -0.012;
     g.add(beam, dot, wand, tip);
-    g.userData = { beam, dot, mat, tip };
+    g.userData = { beam, dot, mat, tip, wand };
     g.visible = false;
     return g;
+  }
+
+  /** A fingertip pointer for hands. hands.js sets .origin/.dir/.active every frame. */
+  addPoke(handedness) {
+    const p = this._makePointer(`poke-${handedness}`);
+    p.poke = true;
+    p.pokeArmed = true;
+    p.pokeMax = 0;
+    p.handedness = handedness;
+    p.origin = new THREE.Vector3();
+    p.dir = new THREE.Vector3(0, 0, -1);
+    p.ray.far = POKE_REACH;
+    return p;
+  }
+
+  /** The hand ray of this hand (to quieten it while the finger is touching something). */
+  rayOf(handedness) {
+    return this.pointers.find((p) => p.controller && p.handedness === handedness && p.isHand);
   }
 
   add(mesh, handlers) {
@@ -128,8 +156,18 @@ export class PointerSystem {
     if (p === this.mouse) {
       if (!p.active || this.renderer.xr.isPresenting) return this._leave(p);
       p.ray.setFromCamera(p.ndc, this.camera);
+    } else if (p.poke) {
+      if (!p.active) { if (p.pressed) this._up(p); return this._leave(p); }
+      p.ray.ray.origin.copy(p.dir).multiplyScalar(-POKE_BACK).add(p.origin);
+      p.ray.ray.direction.copy(p.dir);
     } else {
       if (!p.active) return;
+      if (p.quiet) { // the finger of this hand is touching something: no ray
+        if (p.visual) p.visual.visible = false;
+        if (p.pressed) this._up(p);
+        return this._leave(p);
+      }
+      if (p.visual) p.visual.visible = true;
       tmpMat.identity().extractRotation(p.controller.matrixWorld);
       p.ray.ray.origin.setFromMatrixPosition(p.controller.matrixWorld);
       p.ray.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
@@ -152,6 +190,22 @@ export class PointerSystem {
       const h = p.pressed ? this._hitOn(p, p.pressed.object) : hit;
       if (h) obj.userData.ui.onMove?.(h, p);
     }
+    if (p.poke) {
+      const depth = p.origin.dot(p.dir);
+      if (p.pressed) {
+        p.pokeMax = Math.max(p.pokeMax, depth);
+        const on = this._pokeHit(p, p.pressed.object); // still over the thing you pressed?
+        if (!on || p.pokeMax - depth > POKE_PULL) { p.pokeLast = p.pressed.object; this._up(p, on); p.pokeArmed = false; }
+      } else if (!p.pokeArmed) {
+        // ready again once the finger has really pulled back, or moved off that button
+        const back = p.pokeMax - depth > POKE_REARM && (!hit || hit.distance > POKE_PRESS + 0.008);
+        if (back || !this._pokeHit(p, p.pokeLast)) p.pokeArmed = true;
+      } else if (hit && hit.distance < POKE_PRESS) {
+        this._down(p);
+        p.pokeMax = depth;
+        p.onPoke?.();
+      }
+    }
     if (p.visual) {
       const { beam, dot, tip } = p.visual.userData;
       const d = hit ? hit.distance : 2;
@@ -160,6 +214,14 @@ export class PointerSystem {
       if (hit) dot.position.set(0, 0, -d);
       tip.material.color.setHex(hit ? 0xffb35c : 0x5ce1e6);
     }
+  }
+
+  // A long ray through the fingertip: is the finger still over this object (in front or pushed in)?
+  _pokeHit(p, object) {
+    pokeRay.ray.origin.copy(p.dir).multiplyScalar(-0.1).add(p.origin);
+    pokeRay.ray.direction.copy(p.dir);
+    pokeRay.far = 0.2;
+    return pokeRay.intersectObject(object, false)[0] || null;
   }
 
   // While dragging, keep hitting the pressed object even if the ray slides off it.
@@ -182,10 +244,10 @@ export class PointerSystem {
     this.haptic(p, 0.45, 25);
   }
 
-  _up(p) {
+  _up(p, hitOverride) {
     if (!p.pressed) return;
     const target = p.pressed.object;
-    const h = this._hitOn(p, target);
+    const h = hitOverride !== undefined ? hitOverride : this._hitOn(p, target);
     p.pressed = null;
     target.userData.ui.onUp?.(h, p);
     if (!h) { target.userData.ui.onLeave?.(p); p.hovered = null; }

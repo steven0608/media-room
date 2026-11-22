@@ -1,5 +1,5 @@
 // Shooting stars. A big beat in the music can send one streaking across the sky
-// (now and then, never a shower); in a quiet room one drifts by every half minute or so.
+// (now and then, never a shower); in a quiet room one drifts by every 15 seconds or so.
 // Three reusable streaks; each is a thin quad rebuilt on the CPU every frame (4 vertices).
 import * as THREE from 'three';
 
@@ -33,7 +33,7 @@ export function createMeteors() {
   }
 
   const head = new THREE.Vector3(), tail = new THREE.Vector3(), side = new THREE.Vector3(), toCam = new THREE.Vector3();
-  let cooldown = 3, idleTimer = 12;
+  let cooldown = 3, idleTimer = 6;
 
   function spawn(color) {
     const s = streaks.find((x) => x.age >= x.life);
@@ -56,8 +56,8 @@ export function createMeteors() {
       cooldown -= dt;
       idleTimer -= dt;
       const allowed = (s.stars ?? 1) > 0.5;
-      if (allowed && playing && beat > 1.15 && cooldown <= 0 && Math.random() < 0.35) { spawn(s.accent); cooldown = 4 + Math.random() * 4; }
-      if (allowed && idleTimer <= 0) { spawn(s.accent); idleTimer = 20 + Math.random() * 25; }
+      if (allowed && playing && beat > 1.15 && cooldown <= 0 && Math.random() < 0.35) { spawn(s.accent); cooldown = 3 + Math.random() * 3; }
+      if (allowed && idleTimer <= 0) { spawn(s.accent); idleTimer = 7 + Math.random() * 13; }
       camera.getWorldPosition(toCam);
       for (const st of streaks) {
         if (st.age >= st.life) { st.mesh.visible = false; continue; }

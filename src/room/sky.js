@@ -82,6 +82,7 @@ export function createSky(room) {
   });
   const stars = new THREE.Points(starGeo, starMat);
   stars.frustumCulled = false;
+  stars.renderOrder = -7; // before the aurora (-5) and the drifting clouds (-4, life.js)
   group.add(stars);
 
   // --- moon + halo (two additive sprites)
@@ -93,6 +94,7 @@ export function createSky(room) {
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: haloTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
   halo.position.copy(moon.position);
   halo.scale.setScalar(110);
+  halo.renderOrder = moon.renderOrder = -6; // so clouds can slide in front of the moon
   group.add(halo, moon);
 
   // --- distant hills: one ring mesh, silhouette against the horizon glow

@@ -28,6 +28,8 @@ import { CinemaMode } from './modes/cinema.js';
 import { KaraokeMode } from './modes/karaoke.js';
 import { t as tr, onLang, toggleLang, applyDom, num, errorText } from './i18n.js';
 import { link } from './link.js';
+import { createHands } from './ui/hands.js';
+import { createLife } from './room/life.js';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
@@ -62,7 +64,8 @@ const motes = createMotes();
 const screen = createScreen(renderer);
 const reeds = createReeds();
 const environment = createEnvironment();
-scene.add(sky.group, aurora.mesh, meteors.group, environment.group, lake.mesh, soundRing.group, deck.group, motes.points, reeds.mesh, screen.group);
+const life = createLife(); // lanterns, mist, clouds, leaping fish, birds
+scene.add(sky.group, aurora.mesh, meteors.group, life.group, environment.group, lake.mesh, soundRing.group, deck.group, motes.points, reeds.mesh, screen.group);
 
 // The karaoke microphone rides on your right controller (grip space) in VR.
 const mic = createMic();
@@ -360,6 +363,9 @@ pointer.onButton = (hand, i) => {
   if (hand === 'left' && i === 5) placeUiAtHead();                     // Y = recentre the console/library
 };
 
+// Hands (controllers put down): pinch, fingertip touch, and palm-towards-face to bring the menus.
+const hands = createHands({ renderer, rig, pointer, sfx, onPalm: () => { placeUiAtHead(); if (mode === 'cinema') cinema.poke(); } });
+
 function placeUiAtHead() {
   const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
   cam.getWorldPosition(tmpV);
@@ -621,6 +627,7 @@ renderer.setAnimationLoop((now) => {
   aurora.update(t, s, dancing);
   soundRing.update(t, s, dancing);
   meteors.update(t, dt, s, camera, hit, dancing);
+  life.update(t, dt, s, (x, z, at, k) => lake.touch(x, z, at, k));
   deck.update(t, s, spill, karaoke.micLevel || 0, dancing ? spectrum.range(0, 0.15) : 0);
   environment.update(t, s);
   mic.update(renderer.xr.isPresenting && mode === 'karaoke', s.accent, karaoke.micLevel || 0);
@@ -633,6 +640,7 @@ renderer.setAnimationLoop((now) => {
   updateWidgets(dt, t);
   slideConsole(dt);
   layout.update(dt);
+  if (renderer.xr.isPresenting) hands.update(dt, renderer.xr.getCamera());
   // while the connect card is up, it's the only thing to press
   consoleUi.group.visible = !connectUi.visible;
   if (connectUi.visible && library.isOpen) library.close();
@@ -649,6 +657,6 @@ addEventListener('resize', () => {
 });
 
 // Desktop testing hooks (used by automated checks; harmless otherwise)
-window.__room = { layout, applyScreen, spectrum, aurora, soundRing, meteors, motes, connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
+window.__room = { pointer, hands, life, consoleUi, layout, applyScreen, spectrum, aurora, soundRing, meteors, motes, connectUi, setMode, music, cinema, karaoke, library, engine, room, lake, enterVR, renderer, scene, camera, get mode() { return mode; } };
 
 boot();
