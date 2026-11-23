@@ -13,9 +13,23 @@ export class Mic {
 
   get ready() { return !!this.analyser; }
 
-  /** Ask for the microphone. Call from a click, ideally before entering VR. */
-  async open() {
-    if (this.analyser) return true;
+  /**
+   * Ask for the microphone. Resolves true/false; one request at a time (asking twice while the
+   * first question is still on screen would leave the second waiting forever). Inside VR the Quest
+   * may not be able to show the question at all, so callers never wait on this for long.
+   */
+  open() {
+    if (this.analyser) return Promise.resolve(true);
+    if (!this.pending) this.pending = this._open().finally(() => { this.pending = null; });
+    return this.pending;
+  }
+
+  /** 'granted' | 'denied' | 'prompt' | 'unknown' — without asking. */
+  async permission() {
+    try { return (await navigator.permissions.query({ name: 'microphone' })).state; } catch { return 'unknown'; }
+  }
+
+  async _open() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         // Echo cancellation on: with the Quest's open speakers the mic also hears the backing track.

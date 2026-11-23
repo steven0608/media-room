@@ -83,6 +83,7 @@ const STRINGS = {
   'trial.hud': ['Free trial: {n} days left', '免费试用：剩 {n} 天'],
   'trial.thanks': ['Thank you! Still Water is yours.', '谢谢！Still Water 已属于你。'],
   'connect.getHint': ['Already installed? Keep this open: Connect appears here by itself.', '已经安装了？保持此页面打开：「连接」按钮会自动出现。'],
+  'karaoke.loadingSong': ['Loading the song…', '正在加载歌曲…'],
   'connect.retry': ['Try again', '重试'],
   'connect.pairTitle': ['Pair this headset', '配对此头显'],
   'connect.pairSub': ['Type the 6-digit code shown in the Still Water Hub window on your PC', '输入电脑上 Still Water Hub 窗口中的 6 位配对码'],

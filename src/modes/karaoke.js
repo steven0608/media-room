@@ -20,6 +20,8 @@ const WINDOW = 6;       // seconds of melody visible in the pitch lane
 const NOW_X = 0.24;     // where "now" sits across the lane
 const TOLERANCE = 1.5;  // semitones either side that still count as a hit
 
+/** A promise, or an error after ms milliseconds. */
+const within = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 const fold = (d) => ((((d % 12) + 18) % 12) - 6); // distance in semitones, ignoring octaves
 
 export class KaraokeMode {
@@ -73,7 +75,10 @@ export class KaraokeMode {
     this.message = 'karaoke.loading';
     this.draw(0);
     try {
-      this.song = await (await fetch(`/karaoke/${item.id}/song.json?script=${lyricsScript()}`)).json();
+      const r = await within(fetch(`/karaoke/${item.id}/song.json?script=${lyricsScript()}`), 20000);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      this.song = await r.json();
+      if (!this.song?.lines) throw new Error('no lyrics');
       this.song.id = item.id;
     } catch {
       this.state = 'empty';
@@ -87,7 +92,11 @@ export class KaraokeMode {
     this.noteIdx = 0;
     this.trail = [];
     this.offset = (this.song.offset || 0) + store.get('karaokeOffset', 0);
-    if (!this.autosing && await this.mic.open()) this.voice.connect(this.mic.source);
+    // The microphone joins whenever it's allowed: never wait for it (inside VR the Quest may not be
+    // able to show the permission question, and the song must start anyway).
+    if (!this.autosing && !this.mic.ready) {
+      this.mic.open().then((ok) => { if (ok) { this.voice.connect(this.mic.source); this.onChange(); } });
+    } else if (this.mic.ready) this.voice.connect(this.mic.source);
     this.engine.attach(this.audio);
     // the voice reducer sits between this song and the room's sound (passes straight through when off)
     if (!this.cut) {
@@ -102,14 +111,25 @@ export class KaraokeMode {
     this.cut.reset();
     this.cut.set(this.quick && store.get('vocalCut', true));
     const inst = `/karaoke/${item.id}/instrumental.m4a`;
-    this.audio.src = link.active ? await link.objectUrl(inst) : demo.url(inst);
+    this.message = 'karaoke.loadingSong';
+    this.draw(0);
+    try {
+      // away from home the song comes over the link in one piece: give it time, but not forever
+      const src = link.active ? await within(link.objectUrl(inst), 120000) : demo.url(inst);
+      if (!src) throw new Error('no audio');
+      this.audio.src = src;
+    } catch {
+      this.state = 'empty';
+      this.message = 'karaoke.loadFailed';
+      return this.draw(0);
+    }
     this.audio.currentTime = 0;
     this.audio.pause();
     // "3, 2, 1, Sing!" with sound, so everyone (kids too) knows when it starts.
     this.state = 'countdown';
     this.countT = 3.999;
     this.countEnd = performance.now() / 1000 + this.countT; // real time, even if frames stutter
-    this.countWall = null;
+    this.countAway = null;
     this.lastCue = '';
     this.onChange();
   }
@@ -178,13 +198,19 @@ export class KaraokeMode {
   update(dt, active, clock) {
     // You hear your own voice while a song is on (counting in, singing or paused), never elsewhere.
     this.voice.setOpen(active && (this.state === 'countdown' || this.state === 'singing'));
-    if (!active) { this.micLevel = 0; return; }
+    if (!active) {
+      this.micLevel = 0;
+      // switched to another mode during "3, 2, 1": hold the count until you come back
+      if (this.state === 'countdown' && this.countAway == null) this.countAway = performance.now() / 1000;
+      return;
+    }
     this.frame++;
     if (this.state === 'countdown') {
       const before = Math.ceil(this.countT);
       const wall = performance.now() / 1000;
-      if (this.countWall != null && wall - this.countWall > 0.5) this.countEnd += wall - this.countWall; // was away (other mode): resume, don't skip
-      this.countWall = wall;
+      // Only time spent in another mode is added back. (Slow frames are not "away": the count runs
+      // on the clock, so it always finishes, even if the headset stutters while loading.)
+      if (this.countAway != null) { this.countEnd += wall - this.countAway; this.countAway = null; }
       this.countT = this.countEnd - wall;
       const n = Math.ceil(this.countT);
       if (n !== before && n >= 1 && n <= 3) this.sfx.count(n);

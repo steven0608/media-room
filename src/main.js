@@ -395,8 +395,13 @@ let xrSession = null;
 let placeFrames = 0;
 async function enterVR() {
   engine.unlock();
-  // Ask for the microphone now, on the flat page: permission prompts are unreliable inside VR.
-  if (hasKaraoke && !karaoke.autosing) await karaoke.mic.open();
+  // Ask for the microphone now, on the flat screen: the Quest can't always show the question inside
+  // VR. Only when it hasn't been answered yet, and never for more than 12 seconds.
+  if (!karaoke.autosing && !karaoke.mic.ready && navigator.mediaDevices?.getUserMedia) {
+    const state = await karaoke.mic.permission();
+    if (state === 'granted') karaoke.mic.open();
+    else if (state !== 'denied') await Promise.race([karaoke.mic.open(), new Promise((r) => setTimeout(r, 12000))]);
+  }
   try {
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers'] });
     xrSession = session;
