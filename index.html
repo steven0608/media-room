@@ -23,6 +23,7 @@
     <div class="card hero" role="dialog" aria-labelledby="pair-title">
       <h1 id="pair-title" data-i18n-html="pair.title">Pair this <span>headset</span></h1>
       <p class="muted" data-i18n="pair.sub">Type the 6-digit code shown in the Still Water Hub window on your PC.</p>
+      <button class="btn primary big hidden" id="pair-near" type="button">Connect</button>
       <form id="pair-form" autocomplete="off">
         <div class="code" id="code-boxes"></div>
         <p class="error" id="pair-error" role="alert"></p>
@@ -41,6 +42,7 @@
       <div class="row">
         <button class="btn primary" id="enter-vr" disabled>Checking VR…</button>
         <button class="btn" id="preview" data-i18n="welcome.preview">Desktop preview</button>
+        <button class="btn primary hidden" id="welcome-unlock">Unlock</button>
         <button class="btn hidden" id="welcome-demo" data-i18n="connect.demo">Try the demo</button>
         <button class="btn" id="lang-welcome" data-i18n="lang.switch" aria-label="Language / 语言">中文</button>
       </div>

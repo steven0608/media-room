@@ -31,6 +31,7 @@ import { link } from './link.js';
 import { createHands } from './ui/hands.js';
 import { createLife } from './room/life.js';
 import { demo } from './demo.js';
+import { license } from './license.js';
 import { makeButton } from './ui/widgets.js';
 
 const params = new URLSearchParams(location.search);
@@ -167,7 +168,7 @@ const consoleUi = createConsole({
   sfx,
   actions: {
     mode: (m) => setMode(m),
-    library: () => library.toggle(mode === 'cinema' ? 'video' : mode === 'karaoke' ? 'karaoke' : 'music'),
+    library: () => openLibrary(),
     toggle: () => togglePlay(),
     prev: () => (mode === 'cinema' ? cinema.skip(-10) : music.prev()),
     next: () => (mode === 'cinema' ? cinema.skip(+10) : music.next()),
@@ -335,7 +336,7 @@ addEventListener('keydown', (e) => {
   else if (k === '2') setMode('cinema');
   else if (k === '3') setMode('karaoke');
   else if (k === ' ') { e.preventDefault(); togglePlay(); }
-  else if (k === 'l') library.toggle(mode === 'cinema' ? 'video' : mode === 'karaoke' ? 'karaoke' : 'music');
+  else if (k === 'l') openLibrary();
   else if (k === 'arrowright') mode === 'cinema' ? cinema.skip(10) : music.next();
   else if (k === 'arrowleft') mode === 'cinema' ? cinema.skip(-10) : music.prev();
   else if (k === 'arrowup' || k === '+' || k === '=') setVolume(engine.volume + 0.05);
@@ -373,7 +374,7 @@ pointer.onStick = (hand, x, y, dt) => {
 pointer.onButton = (hand, i) => {
   if (mode === 'cinema') cinema.poke();
   if (hand === 'right' && i === 4) togglePlay();                       // A
-  if (hand === 'right' && i === 5) consoleUi && library.toggle(mode === 'cinema' ? 'video' : mode === 'karaoke' ? 'karaoke' : 'music'); // B
+  if (hand === 'right' && i === 5) consoleUi && openLibrary(); // B
   if (hand === 'left' && i === 4) setMode(mode === 'music' ? 'cinema' : mode === 'cinema' ? 'karaoke' : 'music'); // X
   if (hand === 'left' && i === 5) placeUiAtHead();                     // Y = recentre the console/library
 };
@@ -405,6 +406,7 @@ async function enterVR() {
     placeConsole(true);
     layout.restore('library', 'console');
     placeFrames = 25; // measure your head height after tracking settles
+    if (trialOver()) showUnlock(true); // in VR: the unlock card instead of your library
     if (mode === 'idle') setMode('music');
     setFrameRate();
     session.addEventListener('end', () => { xrSession = null; placeConsole(false); ui.position.set(0, CONFIG.seatedEyeHeight, 0); ui.rotation.set(0, 0, 0); rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0); showWelcome(); });
@@ -432,7 +434,14 @@ function showWelcome() {
   $('welcome').classList.remove('hidden');
   $('hud').classList.add('hidden');
 }
+const trialOver = () => !demo.active && trialLeft <= 0;
+/** The library for this mode (after the free week: the unlock card instead). */
+function openLibrary() {
+  if (trialOver()) return showUnlock(true);
+  library.toggle(mode === 'cinema' ? 'video' : mode === 'karaoke' ? 'karaoke' : 'music');
+}
 function startPreview() {
+  if (trialOver()) return showUnlock(true);
   engine.unlock();
   hideOverlays();
   $('hud').classList.remove('hidden');
@@ -445,8 +454,10 @@ let welcomeNote = null;    // { key, vars }
 function updateHud() {
   const c = libraryCounts;
   if (demo.active) { $('hud-status').textContent = `${tr(`mode.${mode}`)} · ${tr('demo.hud')}`; return; }
+  updateTrialBadge();
   const via = link.active ? ` · ${tr(link.state === 'open' && link.route ? `link.route.${link.route}` : `link.state.${link.state}`)}` : '';
-  $('hud-status').textContent = `${tr(`mode.${mode}`)}${c ? ` · ${tr('hud.counts', { music: num(c.music), video: num(c.video) })}` : ''}${via}`;
+  const trial = Number.isFinite(trialLeft) && trialLeft > 0 ? ` · ${tr('trial.hud', { n: Math.ceil(trialLeft) })}` : '';
+  $('hud-status').textContent = `${tr(`mode.${mode}`)}${c ? ` · ${tr('hud.counts', { music: num(c.music), video: num(c.video) })}` : ''}${via}${trial}`;
 }
 function updateWelcome() {
   const c = libraryCounts;
@@ -519,6 +530,7 @@ function pairingUi() {
 }
 
 async function boot() {
+  license.init(); // what's owned + the local price (Meta store app only)
   if (params.has('emulate')) {
     // Desktop testing without a headset: Meta's Immersive Web Emulation Runtime pretends to be a Quest.
     const { XRDevice, metaQuest3 } = await import('../vendor/iwer/iwer.module.min.js');
@@ -530,6 +542,7 @@ async function boot() {
   $('preview').addEventListener('click', startPreview);
   $('enter-vr').addEventListener('click', enterVR);
   for (const id of ['pair-demo', 'welcome-demo']) $(id).addEventListener('click', () => { $(id).blur(); $('welcome-demo').classList.add('hidden'); startDemo(); });
+  $('pair-near').addEventListener('click', () => { if (nearbyHubs[0]) { hideOverlays(); connectNearby(nearbyHubs[0]); } });
   const vrOk = !!navigator.xr && (await navigator.xr.isSessionSupported('immersive-vr').catch(() => false));
   vrState = vrOk ? 'ok' : 'none';
   if (!vrOk) welcomeNote = { key: window.isSecureContext ? 'welcome.openInQuest' : 'welcome.needHttps' };
@@ -556,6 +569,11 @@ async function connectFlow() {
   let status;
   try { status = await api('/api/status'); } catch (e) { return problem('welcome.hubDown', { msg: e.message }); }
   if (!status.authorized) { if (link.active) link.forget(); return askPair(); } // new headset, or the hub forgot it
+  // try first, then buy: your own media is free for a week (the PC's own preview never stops)
+  if (!demo.active) {
+    trialLeft = license.daysLeft(status.license, { local: !!status.local });
+    if (trialLeft <= 0) return showUnlock(true);
+  }
   if (link.active && status.link) link.route = status.link; // the hub knows if we're home or away
   if (link.active && !routeTimer) {
     // The link can start on the relay and settle on a direct path a moment later: re-check the label.
@@ -603,11 +621,53 @@ async function pairWith(code) {
     connectFlow();
 }
 function askPair() {
+  watchNearby();
   if (!inVR()) return pairingUi();
-  // never paired on this headset: say hello first (pair · get the hub · try the demo)
-  if (link.active && !link.saved?.hubId) connectUi.welcome(pairWith);
+  // not paired: say hello first (connect to the hub we found · code · get the hub · try the demo)
+  if (link.active && !link.saved?.token) connectUi.welcome(pairWith);
   else connectUi.pair(pairWith);
 }
+
+// ---------------------------------------------------------------- one-click connect
+// While you're on the welcome card (or reading "Get the hub"), keep looking for a hub in this
+// home. As soon as one appears, the card offers "Connect to <PC>": one click, no code.
+let nearbyTimer = null;
+let nearbyHubs = [];
+function watchNearby() {
+  if (!link.active || nearbyTimer) return;
+  const look = async () => {
+    const choosing = inVR() ? ['welcome', 'gethub'].includes(connectUi.view) : !$('pairing').classList.contains('hidden');
+    if (!choosing || demo.active || link.saved?.token) return;
+    nearbyHubs = await link.nearby();
+    connectUi.setNearby(nearbyHubs);
+    const btn = $('pair-near');
+    btn.classList.toggle('hidden', !nearbyHubs.length);
+    if (nearbyHubs.length) btn.textContent = tr('connect.oneClick', { name: nearbyHubs[0].name || 'PC' });
+  };
+  look();
+  nearbyTimer = setInterval(look, 4000);
+}
+const deviceName = () => (/OculusBrowser|Quest/i.test(navigator.userAgent) ? 'Quest headset' : 'Browser');
+async function connectNearby(hub) {
+  let cancelled = false;
+  connectUi.onCancel(() => { cancelled = true; link.close(); askPair(); });
+  busy('link.connecting');
+  try {
+    await link.connectTo(hub.id, deviceName(), {
+      onWait: () => { if (inVR()) connectUi.waiting(hub.name); else $('welcome-sub').textContent = tr('connect.waitSub', { name: hub.name || 'PC' }); },
+      cancelled: () => cancelled,
+    });
+  } catch (e) {
+    if (cancelled) return;
+    link.close();
+    link.saved = null;
+    problem(e.data?.code === 'pair-denied' ? 'connect.denied' : /timeout|connection failed|hub-offline/.test(e.message) ? 'link.blocked' : 'link.failed', { msg: e.message });
+    return;
+  }
+  sfx.select?.();
+  connectFlow();
+}
+connectUi.onConnect((hub) => connectNearby(hub));
 connectUi.onRetry(() => connectFlow());
 connectUi.onDemo(() => startDemo());
 
@@ -621,6 +681,44 @@ async function startDemo() {
   await connectFlow();
   if (inVR()) { setMode('music'); library.open?.('music'); }
 }
+// ---------------------------------------------------------------- try first, then buy
+let trialLeft = Infinity;
+function showUnlock(expired) {
+  const buy = async () => {
+    if (!(await license.buy())) return; // closed the store window: nothing changes
+    trialLeft = Infinity;
+    trialBadge.group.visible = false;
+    $('welcome-unlock').classList.add('hidden');
+    connectUi.hide();
+    $('welcome-sub').textContent = tr('trial.thanks');
+    sfx.select?.();
+    connectFlow();
+  };
+  if (inVR()) {
+    connectUi.unlock({ price: license.price, expired, canBuy: license.canBuy, buy, later: () => connectUi.hide() });
+    return;
+  }
+  showWelcome();
+  $('welcome-sub').textContent = `${tr(expired ? 'connect.unlockOver' : 'connect.unlockTitle')} · ${tr(license.canBuy ? 'connect.unlockSub' : 'connect.unlockNoStore', { price: license.price })}`;
+  const btn = $('welcome-unlock');
+  btn.textContent = tr('connect.unlockBtn', { price: license.price });
+  btn.classList.toggle('hidden', !license.canBuy);
+  btn.onclick = () => buy().catch((e) => { $('welcome-sub').textContent = e.message; });
+  $('welcome-demo').classList.remove('hidden');
+  if (expired) $('enter-vr').disabled = true;
+}
+// While in the free week, a small button near the console shows the days left and opens the unlock.
+const trialBadge = makeButton(pointer, sfx, { w: 0.34, h: 0.05, label: '', accent: CONFIG.palette.amber, onClick: () => showUnlock(false) });
+trialBadge.group.position.set(0, -0.19, 0.01);
+trialBadge.group.visible = false;
+consoleUi.group.add(trialBadge.group);
+function updateTrialBadge() {
+  const on = Number.isFinite(trialLeft) && trialLeft > 0 && !demo.active;
+  trialBadge.group.visible = on;
+  if (on) { const n = Math.ceil(trialLeft); trialBadge.setLabel(n <= 1 ? tr('trial.badge1') : tr('trial.badge', { n })); }
+}
+onLang(updateTrialBadge);
+
 // In the demo, a button near the console leads back to connecting your own media.
 const demoBadge = makeButton(pointer, sfx, { w: 0.3, h: 0.05, label: tr('demo.badge'), accent: CONFIG.palette.magenta, onClick: () => location.reload() });
 demoBadge.group.position.set(0, -0.19, 0.01);

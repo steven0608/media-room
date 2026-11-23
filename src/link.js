@@ -76,6 +76,42 @@ class Link {
     this._send({ t: 'hello', token: body.token });
   }
 
+  /** Hubs in this home (same internet address), for "Connect to <PC>". → [{ id, name }] */
+  async nearby() {
+    try {
+      const r = await nativeFetch(`${this.signal}/nearby`, { signal: AbortSignal.timeout(6000) });
+      return r.ok ? (await r.json()).hubs || [] : [];
+    } catch { return []; }
+  }
+
+  /**
+   * One-click connect: no code. The hub lets this headset in straight away when it's on the same
+   * Wi-Fi while the hub's setup page is open; otherwise the PC shows "Allow" and we wait for it.
+   * onWait() is called once if we have to wait. Resolves when paired; throws if denied or gone.
+   */
+  async connectTo(hubId, device, { onWait, cancelled = () => false } = {}) {
+    this.saved = { signal: this.signal, hubId, token: null };
+    await this.connect();
+    const post = await this.fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ request: true, device }) });
+    let body = await post.json().catch(() => ({}));
+    if (!post.ok) { const e = new Error(body.error || 'pairing failed'); e.data = body; throw e; }
+    if (body.pending) {
+      onWait?.();
+      const id = body.id;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (cancelled()) throw Object.assign(new Error('cancelled'), { data: { code: 'cancelled' } });
+        const r = await this.fetch(`/api/pair/request/${id}`);
+        body = await r.json().catch(() => ({}));
+        if (body.state === 'approved') break;
+        if (body.state === 'denied' || body.state === 'gone') throw Object.assign(new Error(body.state), { data: { code: `pair-${body.state}` } });
+      }
+    }
+    this.saved.token = body.token;
+    store.set('link', this.saved);
+    this._send({ t: 'hello', token: body.token });
+  }
+
   /** Stop routing requests to a hub (the demo room answers them instead). */
   deactivate() {
     if (!this.active) return;

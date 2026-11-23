@@ -116,3 +116,9 @@ input:focus-visible, .btn:focus-visible { outline: 2px solid var(--cyan); outlin
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); padding: 12px 18px; border-radius: 14px; background: var(--panel-solid); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: rise .35s both; transition: opacity .5s; z-index: 10; }
 .toast.out { opacity: 0; }
 @media (max-width: 640px) { .choices, .quest, .steps { grid-template-columns: 1fr; } .bigcode .pin { font-size: 40px; } }
+
+.item.ask { border-color: rgba(255,179,92,.6); background: rgba(255,179,92,.08); animation: rise .4s both; }
+.btn.big { font-size: 18px; padding: 14px 26px; margin: 6px 0 14px; }
+.auto { margin-top: 14px; padding: 16px; border-radius: 16px; border: 1px solid rgba(92,225,230,.35); background: rgba(92,225,230,.05); animation: rise .35s both; }
+.auto .item input[type=checkbox] { width: 20px; height: 20px; accent-color: #ffb35c; flex: none; }
+.ask-login { margin-top: 10px; padding: 12px; border-radius: 14px; background: rgba(255,179,92,.08); border: 1px solid rgba(255,179,92,.4); }

@@ -30,7 +30,10 @@ export function createConnectPanel({ pointer, sfx }) {
   let onCode = async () => {};
   let onRetry = () => {};
   let onDemo = () => {};
+  let onConnect = () => {};
+  let onCancel = () => {};
   let pairFn = null;
+  let nearby = []; // hubs found in this home: [{ id, name }]
 
   // number pad: 1 2 3 / 4 5 6 / 7 8 9 / ⌫ 0 Pair
   const pad = new THREE.Group();
@@ -70,6 +73,21 @@ export function createConnectPanel({ pointer, sfx }) {
     get: B('connect.getHub', P.cyan, 0, -0.115, 0.4, () => show('gethub')),
     demo: B('connect.demo', P.magenta, 0, -0.2, 0.4, () => onDemo()),
   };
+  // when your hub is found: one big Connect, the rest below it
+  const connectBtn = B('connect.oneClick', P.amber, 0, -0.03, 0.44, () => nearby[0] && onConnect(nearby[0]));
+  connectBtn.key = null; // label carries the PC's name (set in draw)
+  const found = {
+    code: B('connect.haveCode', P.cyan, -0.105, -0.115, 0.2, toPair),
+    get: B('connect.getHubShort', P.cyan, 0.105, -0.115, 0.2, () => show('gethub')),
+    demo: B('connect.demo', P.magenta, 0, -0.2, 0.42, () => onDemo()),
+  };
+  const cancelBtn = B('connect.cancel', P.cyan, 0, -0.12, 0.2, () => onCancel());
+  // the unlock (after the free week, or from the trial button)
+  let onBuy = () => {};
+  const buyBtn = B('connect.unlockBtn', P.amber, 0, -0.06, 0.42, () => onBuy());
+  buyBtn.key = null; // label carries the price
+  const laterBtn = B('connect.demo', P.magenta, 0, -0.145, 0.42, () => (state.expired ? onDemo() : laterBtn.group.userData.later?.()));
+  laterBtn.key = null;
   const ghub = {
     pair: B('connect.pairNow', P.amber, -0.16, -0.2, 0.15, toPair),
     demo: B('connect.demo', P.magenta, 0, -0.2, 0.15, () => onDemo()),
@@ -80,7 +98,7 @@ export function createConnectPanel({ pointer, sfx }) {
     demo: B('connect.demo', P.magenta, 0.09, -0.3, 0.16, () => onDemo()),
   };
   const statusDemo = B('connect.demo', P.magenta, 0.11, -0.12, 0.2, () => onDemo());
-  const allExtra = [...Object.values(choice), ...Object.values(ghub), ...Object.values(under), statusDemo];
+  const allExtra = [...Object.values(choice), ...Object.values(ghub), ...Object.values(under), statusDemo, ...Object.values(found), cancelBtn, buyBtn, laterBtn];
   function show(view) {
     Object.assign(state, { view, error: '' });
     group.visible = true;
@@ -126,12 +144,15 @@ export function createConnectPanel({ pointer, sfx }) {
     c.beginPath(); c.arc(W / 2 + 12, 54, 22, 0, Math.PI * 2); c.fill();
     c.fillStyle = '#e8ecff';
     c.font = font(58, 750);
-    const title = { pair: t('connect.pairTitle'), welcome: t('connect.welcomeTitle'), gethub: t('connect.getTitle') }[state.view] || t('app.name');
+    const title = { pair: t('connect.pairTitle'), welcome: t('connect.welcomeTitle'), gethub: t('connect.getTitle'), waiting: t('connect.waitTitle'),
+      unlock: t(state.expired ? 'connect.unlockOver' : 'connect.unlockTitle') }[state.view] || t('app.name');
     c.fillText(title, W / 2, 140);
     c.fillStyle = '#9aa3c7';
     c.font = font(34);
     const msg = state.view === 'pair' ? (state.busy ? t('link.connecting') : t('connect.pairSub'))
-      : state.view === 'welcome' ? t('connect.welcomeSub')
+      : state.view === 'welcome' ? (nearby.length ? t('connect.foundSub', { name: nearby[0].name || 'PC' }) : t('connect.welcomeSub'))
+      : state.view === 'waiting' ? t('connect.waitSub', { name: state.waitName || 'PC' })
+      : state.view === 'unlock' ? (state.error || t(state.canBuy ? 'connect.unlockSub' : 'connect.unlockNoStore', { price: state.price }))
       : state.view === 'gethub' ? t('connect.getSub')
       : t(state.msg, state.vars || {});
     wrap(c, msg, W / 2, 205, W - 120, 44);
@@ -143,7 +164,9 @@ export function createConnectPanel({ pointer, sfx }) {
       c.fillStyle = '#ffffff'; c.font = font(44, 750);
       c.fillText(ellipsize(c, CONFIG.getHubAddress, W - 180), W / 2, 354);
       c.fillStyle = '#9aa3c7'; c.font = font(28, 500);
-      c.fillText(t('connect.getSteps'), W / 2, 450);
+      c.fillText(t('connect.getSteps'), W / 2, 448);
+      c.fillStyle = '#5ce1e6'; c.font = font(26, 600);
+      c.fillText(ellipsize(c, t('connect.getHint'), W - 100), W / 2, 500);
     }
     if (state.view === 'pair') {
       // six digit slots
@@ -161,7 +184,7 @@ export function createConnectPanel({ pointer, sfx }) {
         if (filled) { c.fillStyle = '#ffffff'; c.font = font(72, 750); c.fillText(state.digits[i], x + sw / 2, y + 64); }
       }
       if (state.error) { c.fillStyle = '#ff9a8a'; c.font = font(30, 600); wrap(c, state.error, W / 2, 470, W - 80, 38); }
-    } else if (state.view === 'status' && state.msg === 'link.connecting') {
+    } else if ((state.view === 'status' && state.msg === 'link.connecting') || state.view === 'waiting') {
       // a gentle three-dot pulse
       const ph = performance.now() / 400;
       for (let k = 0; k < 3; k++) {
@@ -172,11 +195,19 @@ export function createConnectPanel({ pointer, sfx }) {
     head.tex.needsUpdate = true;
     pad.visible = state.view === 'pair';
     retry.group.visible = state.view === 'status' && !!state.retry;
-    for (const b of Object.values(choice)) b.group.visible = state.view === 'welcome';
+    const hasHub = state.view === 'welcome' && nearby.length > 0;
+    for (const b of Object.values(choice)) b.group.visible = state.view === 'welcome' && !hasHub;
+    for (const b of Object.values(found)) b.group.visible = hasHub;
+    connectBtn.group.visible = hasHub;
+    if (hasHub) connectBtn.setLabel(t('connect.oneClick', { name: nearby[0].name || 'PC' }));
+    cancelBtn.group.visible = state.view === 'waiting';
+    buyBtn.group.visible = laterBtn.group.visible = state.view === 'unlock';
+    buyBtn.setLabel(state.busy && state.view === 'unlock' ? t('connect.unlocking') : t('connect.unlockBtn', { price: state.price || '' }));
+    laterBtn.setLabel(t(state.expired ? 'connect.demo' : 'connect.notNow'));
     for (const b of Object.values(ghub)) b.group.visible = state.view === 'gethub';
     for (const b of Object.values(under)) b.group.visible = state.view === 'pair';
     statusDemo.group.visible = state.view === 'status' && !!state.retry;
-    for (const b of allExtra) b.setLabel(t(b.key));
+    for (const b of allExtra) if (b.key) b.setLabel(t(b.key));
     okBtn.setLabel(t('pair.button'));
     retry.setLabel(t('connect.retry'));
   }
@@ -205,11 +236,36 @@ export function createConnectPanel({ pointer, sfx }) {
     },
     onRetry(fn) { onRetry = fn; },
     onDemo(fn) { onDemo = fn; },
+    onConnect(fn) { onConnect = fn; },
+    onCancel(fn) { onCancel = fn; },
+    /** Hubs found in this home; the welcome card offers one-click Connect when there is one. */
+    setNearby(list) {
+      const before = nearby.map((h) => h.id).join();
+      nearby = list || [];
+      if (nearby.map((h) => h.id).join() !== before && (state.view === 'welcome' || state.view === 'gethub')) { if (nearby.length) sfx.select?.(); show('welcome'); }
+    },
+    /**
+     * The unlock card. { price, expired, canBuy, buy: async () => bought?, later } — expired: the free
+     * week is over (the other button is the demo); otherwise it's "Not now" (back to the room).
+     */
+    unlock({ price, expired, canBuy, buy, later }) {
+      Object.assign(state, { price, expired, canBuy, error: '', busy: false });
+      onBuy = async () => {
+        if (state.busy) return;
+        state.busy = true; state.error = ''; draw();
+        try { await buy(); } catch (e) { state.error = e.message; } finally { state.busy = false; if (group.visible) draw(); }
+      };
+      if (!expired) laterBtn.group.userData.later = later;
+      show('unlock');
+    },
+    /** "Almost there: click Allow on your PC". */
+    waiting(name) { state.waitName = name; show('waiting'); },
+    get view() { return group.visible ? state.view : null; },
     /** First time here: Pair with my hub · Get the hub · Try the demo. fn = what Pair does with a code. */
     welcome(fn) { pairFn = fn; onCode = fn; show('welcome'); },
     press, // same as pointing at a key (used by tests)
     hide() { group.visible = false; },
-    update() { if (group.visible && state.view === 'status' && state.msg === 'link.connecting') draw(); },
+    update() { if (group.visible && ((state.view === 'status' && state.msg === 'link.connecting') || state.view === 'waiting')) draw(); },
   };
   return api;
 }
