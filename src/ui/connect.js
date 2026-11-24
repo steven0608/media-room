@@ -88,8 +88,11 @@ export function createConnectPanel({ pointer, sfx }) {
   buyBtn.key = null; // label carries the price
   const laterBtn = B('connect.demo', P.magenta, 0, -0.145, 0.42, () => (state.expired ? onDemo() : laterBtn.group.userData.later?.()));
   laterBtn.key = null;
+  let onEmail = () => {};
+  const emailBtn = B('connect.emailMe', P.amber, 0, -0.115, 0.42, () => onEmail());
   const ghub = {
-    pair: B('connect.pairNow', P.amber, -0.16, -0.2, 0.15, toPair),
+    email: emailBtn,
+    pair: B('connect.pairNow', P.cyan, -0.16, -0.2, 0.15, toPair),
     demo: B('connect.demo', P.magenta, 0, -0.2, 0.15, () => onDemo()),
     back: B('connect.back', P.cyan, 0.16, -0.2, 0.15, () => show('welcome')),
   };
@@ -237,6 +240,7 @@ export function createConnectPanel({ pointer, sfx }) {
     onRetry(fn) { onRetry = fn; },
     onDemo(fn) { onDemo = fn; },
     onConnect(fn) { onConnect = fn; },
+    onEmail(fn) { onEmail = fn; },
     onCancel(fn) { onCancel = fn; },
     /** Hubs found in this home; the welcome card offers one-click Connect when there is one. */
     setNearby(list) {

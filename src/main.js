@@ -26,7 +26,7 @@ import { createLayout } from './ui/layout.js';
 import { MusicMode } from './modes/music.js';
 import { CinemaMode } from './modes/cinema.js';
 import { KaraokeMode } from './modes/karaoke.js';
-import { t as tr, onLang, toggleLang, applyDom, num, errorText } from './i18n.js';
+import { t as tr, onLang, toggleLang, applyDom, num, errorText, getLang } from './i18n.js';
 import { link } from './link.js';
 import { createHands } from './ui/hands.js';
 import { createLife } from './room/life.js';
@@ -414,7 +414,10 @@ async function enterVR() {
     if (trialOver()) showUnlock(true); // in VR: the unlock card instead of your library
     if (mode === 'idle') setMode('music');
     setFrameRate();
-    session.addEventListener('end', () => { xrSession = null; placeConsole(false); ui.position.set(0, CONFIG.seatedEyeHeight, 0); ui.rotation.set(0, 0, 0); rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0); showWelcome(); });
+    session.addEventListener('end', () => {
+      xrSession = null; placeConsole(false); ui.position.set(0, CONFIG.seatedEyeHeight, 0); ui.rotation.set(0, 0, 0); rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
+      if (emailAfterExit) { emailAfterExit = false; showEmailCard(); } else showWelcome();
+    });
     renderer.xr.getReferenceSpace()?.addEventListener?.('reset', () => { placeFrames = 5; });
     // Quest system menu (or the headset taken off): pause what's playing, as Meta's store requires.
     session.addEventListener('visibilitychange', () => { if (session.visibilityState !== 'visible') pauseAll(); });
@@ -433,7 +436,7 @@ function setFrameRate() {
 }
 
 // ---------------------------------------------------------------- overlays
-function hideOverlays() { for (const id of ['pairing', 'welcome']) $(id).classList.add('hidden'); }
+function hideOverlays() { for (const id of ['pairing', 'welcome', 'emailcard']) $(id).classList.add('hidden'); }
 function showWelcome() {
   hideOverlays();
   $('welcome').classList.remove('hidden');
@@ -547,6 +550,7 @@ async function boot() {
   $('preview').addEventListener('click', startPreview);
   $('enter-vr').addEventListener('click', enterVR);
   for (const id of ['pair-demo', 'welcome-demo']) $(id).addEventListener('click', () => { $(id).blur(); $('welcome-demo').classList.add('hidden'); startDemo(); });
+  $('pair-email').addEventListener('click', () => askEmail());
   $('pair-near').addEventListener('click', () => { if (nearbyHubs[0]) { hideOverlays(); connectNearby(nearbyHubs[0]); } });
   const vrOk = !!navigator.xr && (await navigator.xr.isSessionSupported('immersive-vr').catch(() => false));
   vrState = vrOk ? 'ok' : 'none';
@@ -675,6 +679,45 @@ async function connectNearby(hub) {
 connectUi.onConnect((hub) => connectNearby(hub));
 connectUi.onRetry(() => connectFlow());
 connectUi.onDemo(() => startDemo());
+
+// ---------------------------------------------------------------- "email me the setup guide"
+// Typing an address in VR is clumsy, so we step out to the flat screen for a moment, where the
+// Quest's own keyboard (and voice typing) work, then offer "Back to VR".
+let emailAfterExit = false;
+function askEmail() {
+  if (inVR() && xrSession) { emailAfterExit = true; xrSession.end(); return; }
+  showEmailCard();
+}
+function showEmailCard() {
+  hideOverlays();
+  $('emailcard').classList.remove('hidden');
+  $('email-status').textContent = '';
+  $('email-back').textContent = tr(vrState === 'ok' ? 'email.backVr' : 'email.back');
+  setTimeout(() => $('email-input').focus(), 150);
+}
+$('email-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const signal = link.signal || CONFIG.remote.signal;
+  $('email-send').disabled = true;
+  $('email-status').textContent = tr('email.sending');
+  try {
+    const r = await fetch(`${signal}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email-input').value, lang: getLang(), news: $('email-news').checked }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error || 'failed'), { data: j });
+    $('email-status').textContent = tr('email.sent');
+    $('email-status').style.color = 'var(--ok)';
+    $('email-send').classList.add('hidden');
+  } catch (err) {
+    $('email-status').style.color = '';
+    $('email-status').textContent = errorText(err);
+  } finally { $('email-send').disabled = false; }
+});
+$('email-back').addEventListener('click', () => {
+  $('emailcard').classList.add('hidden');
+  $('email-send').classList.remove('hidden');
+  if (vrState === 'ok') enterVR(); else showWelcome();
+});
+connectUi.onEmail(() => askEmail());
 
 // ---------------------------------------------------------------- the demo room (no hub needed)
 async function startDemo() {
