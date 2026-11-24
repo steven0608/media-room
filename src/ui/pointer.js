@@ -74,10 +74,11 @@ export class PointerSystem {
         p.handedness = e.data.handedness;
         p.active = e.data.targetRayMode === 'tracked-pointer' || e.data.targetRayMode === 'transient-pointer' || !!e.data.hand;
         p.isHand = !!e.data.hand;
+        p.quiet = false; // a fresh input: never inherit "silenced" from the hand that was here before
         p.visual.visible = p.active;
         p.visual.userData.wand.visible = !p.isHand; // your real hand is drawn instead
       });
-      ctrl.addEventListener('disconnected', () => { p.active = false; p.visual.visible = false; this._leave(p); });
+      ctrl.addEventListener('disconnected', () => { p.active = false; p.quiet = false; p.visual.visible = false; this._leave(p); });
       ctrl.addEventListener('selectstart', () => this._down(p));
       ctrl.addEventListener('selectend', () => this._up(p));
       ctrl.addEventListener('squeezestart', () => this._down(p));
@@ -162,7 +163,7 @@ export class PointerSystem {
       p.ray.ray.direction.copy(p.dir);
     } else {
       if (!p.active) return;
-      if (p.quiet) { // the finger of this hand is touching something: no ray
+      if (p.quiet && p.isHand) { // the finger of this hand is touching something: no ray (controllers: never)
         if (p.visual) p.visual.visible = false;
         if (p.pressed) this._up(p);
         return this._leave(p);

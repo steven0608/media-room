@@ -129,7 +129,13 @@ export function createHands({ renderer, rig, pointer, sfx, onPalm }) {
         const tip = joint(h, 'index-finger-tip');
         const ok = h.active && tip && tip.visible !== false && joint(h, 'wrist');
         h.dots.visible = h.bones.visible = !!ok;
-        if (!ok) { h.ring.visible = false; if (h.poke) h.poke.active = false; continue; }
+        if (!ok) {
+          h.ring.visible = false;
+          if (h.poke) h.poke.active = false;
+          const r = h.handedness && pointer.rayOf(h.handedness);
+          if (r) r.quiet = false; // tracking lost: the ray works again
+          continue;
+        }
 
         // dots
         for (let j = 0; j < N; j++) {

@@ -8,7 +8,7 @@
 // you sang.
 import { api, store } from '../api.js';
 import { Mic } from '../audio/pitch.js';
-import { VoiceMonitor } from '../audio/voice.js';
+import { VoiceMonitor, TUNE_ORDER } from '../audio/voice.js';
 import { canvasTexture, font, ellipsize, roundRect, fmtTime } from '../ui/text.js';
 import { t as tr, onLang, lyricsScript } from '../i18n.js';
 import { link } from '../link.js';
@@ -22,6 +22,8 @@ const TOLERANCE = 1.5;  // semitones either side that still count as a hit
 
 /** A promise, or an error after ms milliseconds. */
 const within = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
+const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+const noteName = (n) => `${NOTE_NAMES[((n % 12) + 12) % 12]}${Math.floor(n / 12) - 1}`;
 const fold = (d) => ((((d % 12) + 18) % 12) - 6); // distance in semitones, ignoring octaves
 
 export class KaraokeMode {
@@ -30,7 +32,7 @@ export class KaraokeMode {
     this.sfx = sfx;
     this.mic = new Mic(engine);
     // Hear yourself through the speakers (KTV style), with your own volume and echo settings.
-    this.voice = new VoiceMonitor(engine, { volume: store.get('voiceVolume', 0.8), echo: store.get('voiceEcho', true) });
+    this.voice = new VoiceMonitor(engine, { volume: store.get('voiceVolume', 0.8), echo: store.get('voiceEcho', true), tune: store.get('voiceTune', 'off') });
     this.regions = []; // buttons drawn on the board: { key, x, y, w, h }
     this.hover = null;
     this.countT = 0;   // seconds left in the "3, 2, 1" before the song starts
@@ -238,6 +240,7 @@ export class KaraokeMode {
       const notes = this.song.notes;
       while (this.noteIdx < notes.length && notes[this.noteIdx].t + notes[this.noteIdx].d < t - 0.12) this.noteIdx++;
       const target = notes[this.noteIdx] && notes[this.noteIdx].t - 0.12 <= t ? notes[this.noteIdx] : null;
+      this.voice.setTarget(target ? target.midi : null); // auto-tune "melody" pulls you to this note
       let voice = null;
       if (this.autosing) {
         voice = target ? { midi: target.midi + Math.sin(clock * 7) * 0.4 } : null;
@@ -287,8 +290,10 @@ export class KaraokeMode {
       ctx.fillStyle = '#9aa3c7';
       ctx.font = font(30);
       ctx.fillText(tr(this.message || 'karaoke.pick'), W / 2, H / 2 + 30);
+      this.regions = []; this.tuneRegions = [];
     } else if (this.state === 'countdown') {
       this.regions = [];
+      this._drawTuneRow(); // choose auto-tune while counting in
       this._drawLane(t);
       this._drawCountdown(clock);
       this._drawLyrics(t, false, false);
@@ -297,7 +302,7 @@ export class KaraokeMode {
       this._drawLyrics(t, true);
       this._drawHud(t);
       if (this.goT != null && clock - this.goT < 0.9) this._drawGo(clock - this.goT);
-    } else { this.regions = []; this._drawScore(clock); }
+    } else { this.regions = []; this.tuneRegions = []; this._drawScore(clock); }
     this.texture.needsUpdate = true;
   }
 
@@ -536,6 +541,7 @@ export class KaraokeMode {
       { key: 'voice+', text: '+', w: 46 },
       { key: 'echo', text: tr(this.voice.echo ? 'karaoke.echoOn' : 'karaoke.echoOff'), w: 0, on: this.voice.echo },
     ];
+    this._drawTuneRow();
     if (this.quick && this.cut) items.push({ key: 'cut', text: tr(this.cut.mono ? 'karaoke.singerMono' : this.cut.on ? 'karaoke.singerLow' : 'karaoke.singerOn'), w: 0, on: this.cut.on });
     ctx.font = font(22, 650);
     ctx.textBaseline = 'middle';
@@ -558,9 +564,62 @@ export class KaraokeMode {
     }
   }
 
+  /**
+   * Auto-tune, under the pitch lane on the right: Off | Natural | Melody | Robot, and the note
+   * you're on while you sing (green when it's the song's note). Melody only for songs that know
+   * their melody. Drawn before the voice row, so this.regions is reset there afterwards — keep both.
+   */
+  _drawTuneRow() {
+    const ctx = this.ctx;
+    const modes = TUNE_ORDER.filter((m) => m !== 'melody' || (this.song?.notes?.length > 0));
+    const cur = this.voice.tune === 'melody' && !modes.includes('melody') ? 'natural' : this.voice.tune;
+    const y = 334, h = 38;
+    ctx.font = font(21, 650);
+    ctx.textBaseline = 'middle';
+    const chips = modes.map((m) => ({ m, text: tr(`karaoke.tune.${m}`), w: Math.ceil(ctx.measureText(tr(`karaoke.tune.${m}`)).width) + 28 }));
+    const info = this.voice.tuneInfo;
+    const noteOn = cur !== 'off' && info.voiced && info.note != null;
+    const noteText = noteOn ? `♪ ${noteName(info.note)}` : '';
+    const label = tr('karaoke.tune');
+    const labelW = Math.ceil(ctx.measureText(label).width) + 12;
+    const noteW = noteText ? Math.ceil(ctx.measureText(noteText).width) + 28 : 0;
+    const total = labelW + chips.reduce((a, c) => a + c.w + 6, 0) + (noteW ? noteW + 10 : 0);
+    let x = W - 44 - total;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#c9cff0';
+    ctx.fillText(label, x, y + h / 2 + 1);
+    x += labelW;
+    // one rounded track with the chips inside, the chosen one lit
+    roundRect(ctx, x - 4, y - 4, chips.reduce((a, c) => a + c.w + 6, 0) + 2, h + 8, (h + 8) / 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fill();
+    this.tuneRegions = [];
+    for (const c of chips) {
+      const on = c.m === cur, hov = this.hover?.key === `tune:${c.m}`;
+      roundRect(ctx, x, y, c.w, h, h / 2);
+      ctx.fillStyle = on ? (c.m === 'off' ? 'rgba(255,255,255,0.22)' : 'rgba(255,79,163,0.55)') : hov ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0)';
+      ctx.fill();
+      ctx.fillStyle = on ? '#ffffff' : '#c9cff0';
+      ctx.textAlign = 'center';
+      ctx.fillText(c.text, x + c.w / 2, y + h / 2 + 1);
+      this.tuneRegions.push({ key: `tune:${c.m}`, x, y, w: c.w, h });
+      x += c.w + 6;
+    }
+    if (noteText) {
+      x += 6;
+      const target = this.voice.target;
+      const hit = target != null && ((info.note - target) % 12 + 12) % 12 === 0;
+      roundRect(ctx, x, y, noteW, h, h / 2);
+      ctx.fillStyle = hit ? 'rgba(107,227,164,0.3)' : 'rgba(92,225,230,0.18)'; ctx.fill();
+      ctx.fillStyle = hit ? '#6be3a4' : '#5ce1e6';
+      ctx.textAlign = 'center';
+      ctx.fillText(noteText, x + noteW / 2, y + h / 2 + 1);
+    }
+    ctx.textAlign = 'left';
+  }
+
   /** Pointer support for the board's buttons. x, y in canvas pixels. */
   hit(x, y) {
-    return this.regions.find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) || null;
+    return [...this.regions, ...(this.tuneRegions || [])].find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) || null;
   }
   setHover(r) {
     if ((r?.key ?? null) === (this.hover?.key ?? null)) return;
@@ -573,6 +632,7 @@ export class KaraokeMode {
     if (r.key === 'voice-' || r.key === 'voice+') store.set('voiceVolume', this.voice.setVolume(this.voice.volume + (r.key === 'voice+' ? 0.1 : -0.1)));
     else if (r.key === 'echo') { this.voice.setEcho(!this.voice.echo); store.set('voiceEcho', this.voice.echo); }
     else if (r.key === 'cut' && this.cut && !this.cut.mono) { this.cut.set(!this.cut.on); store.set('vocalCut', this.cut.on); }
+    else if (r.key.startsWith('tune:')) store.set('voiceTune', this.voice.setTune(r.key.slice(5)));
   }
 
   _drawScore(clock) {

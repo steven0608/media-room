@@ -1,6 +1,6 @@
 // "Hear yourself": the karaoke microphone played back through the speakers, like a KTV room.
 //
-//   mic → low-cut → presence lift → boost → compressor ─┬─ dry ────────────────┐
+//   mic → [auto-tune] → low-cut → presence lift → boost → compressor ─┬─ dry ──┐
 //                                                       ├─ room reverb ────────┼→ voice volume → speakers
 //                                                       └─ short echo (KTV) ───┘
 //
@@ -9,13 +9,64 @@
 // right next to its microphones, and the browser removes what it plays (including this
 // playback) from what the mic hears, which is what stops the howl of feedback.
 // A little reverb and echo also hide the headset's small mic-to-speaker delay.
+// Auto-tune presets (audio/autotune-worklet.js, from Moon Booth). amount = how far you're pulled
+// to the note, speed = how quickly. "melody" pulls to the song's own note when the karaoke
+// version knows it (otherwise the nearest note); "robot" snaps at once (the pop sound).
+export const TUNE = {
+  off:     { amount: 0,    speed: 0.05 },
+  natural: { amount: 0.75, speed: 0.07 },
+  melody:  { amount: 0.85, speed: 0.05 },
+  robot:   { amount: 1,    speed: 0.004 },
+};
+export const TUNE_ORDER = ['off', 'natural', 'melody', 'robot'];
+
 export class VoiceMonitor {
-  constructor(engine, { volume = 0.8, echo = true } = {}) {
+  constructor(engine, { volume = 0.8, echo = true, tune = 'off' } = {}) {
     this.engine = engine;
     this.volume = volume;
     this.echo = echo;
+    this.tune = TUNE[tune] ? tune : 'off';
     this.open = false;
     this.out = null;
+    this.tuner = null;
+    this.tuneInfo = { available: false, voiced: false, note: null };
+    this.target = null;
+  }
+
+  /** Auto-tune: off | natural | melody | robot. */
+  setTune(mode) {
+    this.tune = TUNE[mode] ? mode : 'off';
+    this._tuneApply();
+    return this.tune;
+  }
+
+  /** The song's note right now (MIDI), for "melody" mode; null between notes. */
+  setTarget(midi) {
+    const m = this.tune === 'melody' && midi != null ? Math.round(midi) : null;
+    if (m === this.target) return;
+    this.target = m;
+    this.tuner?.port.postMessage({ target: m });
+  }
+
+  _tuneApply() {
+    const p = TUNE[this.tune];
+    this.tuner?.port.postMessage({ amount: this.open ? p.amount : 0, speed: p.speed, target: this.tune === 'melody' ? this.target : null });
+  }
+
+  /** Load the tuner and put it first in the chain (in the background: singing never waits for it). */
+  async _addTuner(ctx, source, input) {
+    try {
+      await ctx.audioWorklet.addModule(new URL('./autotune-worklet.js', import.meta.url));
+      const tuner = new AudioWorkletNode(ctx, 'autotune', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      tuner.port.onmessage = (e) => { this.tuneInfo.voiced = e.data.voiced; this.tuneInfo.note = e.data.note; };
+      source.disconnect(input);
+      source.connect(tuner).connect(input);
+      this.tuner = tuner;
+      this.tuneInfo.available = true;
+      this._tuneApply();
+    } catch (e) {
+      console.warn('auto-tune unavailable', e); // everything else still works
+    }
   }
 
   /** Plug in the microphone (a MediaStreamAudioSourceNode). Safe to call more than once. */
@@ -30,7 +81,9 @@ export class VoiceMonitor {
     boost.gain.value = 2.2; // auto-gain is off (it fights pitch detection), so lift the voice here
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -26; comp.knee.value = 8; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.18;
-    source.connect(lowCut).connect(presence).connect(boost).connect(comp);
+    const input = ctx.createGain(); // the tuner slots in between the mic and this
+    source.connect(input).connect(lowCut).connect(presence).connect(boost).connect(comp);
+    this._addTuner(ctx, source, input);
 
     const out = ctx.createGain();
     out.gain.value = 0;
@@ -82,6 +135,7 @@ export class VoiceMonitor {
     this.out.gain.setTargetAtTime(this.open ? this.volume : 0, t, 0.06);
     this.verbGain.gain.setTargetAtTime(this.echo ? 0.32 : 0.1, t, 0.05);
     this.echoGain.gain.setTargetAtTime(this.echo ? 0.3 : 0, t, 0.05);
+    this._tuneApply(); // tuning only while you're singing
   }
 }
 
