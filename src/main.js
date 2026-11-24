@@ -31,6 +31,7 @@ import { link } from './link.js';
 import { createHands } from './ui/hands.js';
 import { createLife } from './room/life.js';
 import { demo } from './demo.js';
+import { log } from './log.js';
 import { license } from './license.js';
 import { makeButton } from './ui/widgets.js';
 
@@ -402,14 +403,15 @@ let xrSession = null;
 let placeFrames = 0;
 async function enterVR() {
   engine.unlock();
-  // Ask for the microphone now, on the flat screen: the Quest can't always show the question inside
-  // VR. Only when it hasn't been answered yet, and never for more than 12 seconds.
+  // The microphone: switched back on quietly if it was allowed before. Never asked or waited for
+  // here (the installed app opens straight into VR); karaoke asks when you first sing.
   if (!karaoke.autosing && !karaoke.mic.ready && navigator.mediaDevices?.getUserMedia) {
-    const state = await karaoke.mic.permission();
-    if (state === 'granted') karaoke.mic.open();
-    else if (state !== 'denied') await Promise.race([karaoke.mic.open(), new Promise((r) => setTimeout(r, 12000))]);
+    karaoke.mic.permission().then((state) => {
+      if (state === 'granted') karaoke.mic.open().then((ok) => { if (ok) karaoke.voice.connect(karaoke.mic.source); });
+    });
   }
   try {
+    log('enterVR');
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers'] });
     xrSession = session;
     await renderer.xr.setSession(session);
@@ -423,6 +425,7 @@ async function enterVR() {
     if (mode === 'idle') setMode('music');
     setFrameRate();
     session.addEventListener('end', () => {
+      log('vr-end');
       xrSession = null; placeConsole(false); ui.position.set(0, CONFIG.seatedEyeHeight, 0); ui.rotation.set(0, 0, 0); rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
       if (emailAfterExit) { emailAfterExit = false; showEmailCard(); }
       else if (micAfterExit) { micAfterExit = false; showMicCard(); }
@@ -430,8 +433,9 @@ async function enterVR() {
     });
     renderer.xr.getReferenceSpace()?.addEventListener?.('reset', () => { placeFrames = 5; });
     // Quest system menu (or the headset taken off): pause what's playing, as Meta's store requires.
-    session.addEventListener('visibilitychange', () => { if (session.visibilityState !== 'visible') pauseAll(); });
+    session.addEventListener('visibilitychange', () => { log('vr-visibility', session.visibilityState); if (session.visibilityState !== 'visible') pauseAll(); });
   } catch (e) {
+    log('enterVR-failed', e.message);
     welcomeNote = { key: 'welcome.vrFailed', vars: { msg: e.message } };
     updateWelcome();
   }
@@ -567,7 +571,8 @@ async function boot() {
   if (!vrOk) welcomeNote = { key: window.isSecureContext ? 'welcome.openInQuest' : 'welcome.needHttps' };
   // Served by the hub (home), or the public page reaching the hub over the encrypted link?
   const how = await link.init();
-  if (how.mode === 'link') link.onState(() => updateHud());
+  log('boot', { mode: how.mode, paired: how.paired });
+  if (how.mode === 'link') link.onState((l) => { updateHud(); log('link', { state: l.state, route: l.route, error: l.error }); });
   // The installed app: straight into VR (tapping the app icon counts as the click VR needs).
   if (APP_MODE && vrOk) await enterVR();
   if (params.has('demo')) return startDemo();
@@ -697,8 +702,28 @@ connectUi.onDemo(() => startDemo());
 // screen says where to switch it on. Then "Back to VR".
 let micAfterExit = false;
 function askMic() {
-  if (inVR() && xrSession) { micAfterExit = true; xrSession.end(); return; }
-  showMicCard();
+  if (!inVR()) return showMicCard();
+  // In VR: ask right here. Leaving VR can close the installed app, so we never do.
+  connectUi.info({ icon: '🎤', title: tr('micq.asking'), sub: tr('micq.askingSub'), primary: { label: tr('connect.cancel'), onClick: () => connectUi.hide() } });
+  log('mic-ask');
+  const asked = karaoke.mic.retry();
+  Promise.race([asked, new Promise((r) => setTimeout(() => r(null), 10000))]).then((ok) => {
+    log('mic-answer', { ok, error: karaoke.mic.error || null });
+    if (ok) {
+      karaoke.voice.connect(karaoke.mic.source);
+      connectUi.info({ icon: '🎤', title: tr('micq.onTitle'), sub: tr('micq.onSub'), primary: { label: tr('tour.go'), onClick: () => connectUi.hide() } });
+      sfx.select?.();
+      setTimeout(() => { if (connectUi.view === 'info') connectUi.hide(); }, 2500);
+      return;
+    }
+    // blocked, or the question never appeared: say exactly where to switch it on
+    connectUi.info({
+      icon: '⚙️', title: tr('micq.blockedTitle'), sub: tr('micq.blockedSub'),
+      primary: { label: tr('micx.again'), onClick: () => askMic() },
+      secondary: { label: tr('connect.notNow'), onClick: () => connectUi.hide() },
+    });
+  });
+  asked.then((ok) => { if (ok && !karaoke.voice.out) karaoke.voice.connect(karaoke.mic.source); }); // late "yes"
 }
 function showMicCard() {
   hideOverlays();
@@ -774,9 +799,18 @@ function maybeAskMic() {
 // Typing an address in VR is clumsy, so we step out to the flat screen for a moment, where the
 // Quest's own keyboard (and voice typing) work, then offer "Back to VR".
 let emailAfterExit = false;
+async function sendGuide(email, news) {
+  const signal = link.signal || CONFIG.remote.signal;
+  const r = await fetch(`${signal}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, lang: getLang(), news }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(errorText({ data: j, message: j.error || 'failed' })), { data: j });
+  return tr('email.sent');
+}
 function askEmail() {
-  if (inVR() && xrSession) { emailAfterExit = true; xrSession.end(); return; }
-  showEmailCard();
+  if (!inVR()) return showEmailCard();
+  // In VR: a keyboard right here (leaving VR can close the installed app)
+  connectUi.onCancel(() => askPair());
+  connectUi.emailForm(sendGuide);
 }
 function showEmailCard() {
   hideOverlays();

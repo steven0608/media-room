@@ -101,6 +101,44 @@ export function createConnectPanel({ pointer, sfx }) {
     demo: B('connect.demo', P.magenta, 0.09, -0.3, 0.16, () => onDemo()),
   };
   const statusDemo = B('connect.demo', P.magenta, 0.11, -0.12, 0.2, () => onDemo());
+  // ---- the email keyboard (in VR: leaving VR can close the installed app, so we type here)
+  let kb = null;
+  let onEmailSend = async () => {};
+  function buildKeyboard() {
+    if (kb) return kb;
+    const g = new THREE.Group();
+    const rows = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm.-_'];
+    const KW = 0.043, GAP = 0.004, top = -0.005;
+    const keys = [];
+    const press = (k) => { if (state.emailBusy) return; state.emailMsg = ''; if (k === 'del') state.email = state.email.slice(0, -1); else if (state.email.length < 80) state.email += k; draw(); };
+    rows.forEach((row, r) => {
+      [...row].forEach((ch, i) => {
+        const b = makeButton(pointer, sfx, { w: KW, h: 0.042, label: ch, accent: P.cyan, onClick: () => press(ch) });
+        b.group.position.set((i - (row.length - 1) / 2) * (KW + GAP), top - r * 0.048, 0);
+        g.add(b.group); keys.push(b);
+      });
+    });
+    const y4 = top - 4 * 0.048, y5 = y4 - 0.052;
+    const wide = (label, x, y, w, fn, accent = P.cyan) => { const b = makeButton(pointer, sfx, { w, h: 0.042, label, accent, onClick: fn }); b.group.position.set(x, y, 0); g.add(b.group); keys.push(b); return b; };
+    wide('@gmail.com', -0.16, y4, 0.15, () => press('@gmail.com'));
+    wide('@', -0.05, y4, 0.05, () => press('@'));
+    wide('.com', 0.025, y4, 0.08, () => press('.com'));
+    wide('⌫', 0.105, y4, 0.06, () => press('del'));
+    const news = wide('', 0.19, y4, 0.09, () => { state.news = !state.news; draw(); }, P.amber);
+    const cancel = wide('', -0.1, y5, 0.16, () => onCancel());
+    const send = wide('', 0.1, y5, 0.2, async () => {
+      if (state.emailBusy) return;
+      state.emailBusy = true; state.emailMsg = t('email.sending'); draw();
+      try { state.emailMsg = await onEmailSend(state.email, state.news); state.emailDone = true; } catch (e) { state.emailMsg = e.message; }
+      finally { state.emailBusy = false; draw(); }
+    }, P.amber);
+    g.traverse((o) => { o.renderOrder = 40; if (o.material) o.material.depthTest = false; });
+    g.position.set(0, -0.035, 0);
+    group.add(g);
+    kb = { g, keys, news, cancel, send };
+    return kb;
+  }
+
   // the info view (first-visit tour, "turn on your microphone?"): one or two buttons
   let info = null; // { title, sub, icon, page: [i, n], primary: { label, onClick }, secondary? }
   const infoMain = B('connect.next', P.amber, 0.105, -0.2, 0.2, () => info?.primary?.onClick());
@@ -153,7 +191,7 @@ export function createConnectPanel({ pointer, sfx }) {
     c.fillStyle = '#e8ecff';
     c.font = font(58, 750);
     const title = { pair: t('connect.pairTitle'), welcome: t('connect.welcomeTitle'), gethub: t('connect.getTitle'), waiting: t('connect.waitTitle'),
-      unlock: t(state.expired ? 'connect.unlockOver' : 'connect.unlockTitle'), info: info?.title }[state.view] || t('app.name');
+      unlock: t(state.expired ? 'connect.unlockOver' : 'connect.unlockTitle'), info: info?.title, email: t('email.vrTitle') }[state.view] || t('app.name');
     c.fillText(title, W / 2, 140);
     c.fillStyle = '#9aa3c7';
     c.font = font(34);
@@ -162,9 +200,18 @@ export function createConnectPanel({ pointer, sfx }) {
       : state.view === 'waiting' ? t('connect.waitSub', { name: state.waitName || 'PC' })
       : state.view === 'unlock' ? (state.error || t(state.canBuy ? 'connect.unlockSub' : 'connect.unlockNoStore', { price: state.price }))
       : state.view === 'info' ? info?.sub || ''
+      : state.view === 'email' ? (state.emailMsg || t('email.vrSub'))
       : state.view === 'gethub' ? t('connect.getSub')
       : t(state.msg, state.vars || {});
     wrap(c, msg, W / 2, 205, W - 120, 44);
+    if (state.view === 'email') { // what you've typed, big, with a caret
+      roundRect(c, 60, 288, W - 120, 92, 20);
+      c.fillStyle = 'rgba(255,255,255,0.07)'; c.fill();
+      c.lineWidth = 3; c.strokeStyle = state.emailDone ? '#6be3a4' : 'rgba(92,225,230,0.7)'; c.stroke();
+      c.fillStyle = state.email ? '#ffffff' : '#6f789e'; c.font = font(44, 650);
+      const caret = !state.emailDone && Math.floor(performance.now() / 500) % 2 ? '|' : ' ';
+      c.fillText(ellipsize(c, (state.email || t('email.placeholder')) + (state.email ? caret : ''), W - 160), W / 2, 336);
+    }
     if (state.view === 'info' && info) {
       if (info.icon) { c.font = font(110); c.fillText(info.icon, W / 2, 380); }
       if (info.page) { // page dots
@@ -221,6 +268,13 @@ export function createConnectPanel({ pointer, sfx }) {
     if (hasHub) connectBtn.setLabel(t('connect.oneClick', { name: nearby[0].name || 'PC' }));
     cancelBtn.group.visible = state.view === 'waiting';
     buyBtn.group.visible = laterBtn.group.visible = state.view === 'unlock';
+    if (kb) {
+      kb.g.visible = state.view === 'email';
+      kb.news.setLabel(`${state.news ? '☑' : '☐'} ${t('email.newsShort')}`);
+      kb.cancel.setLabel(t(state.emailDone ? 'email.done' : 'connect.back'));
+      kb.send.setLabel(t(state.emailBusy ? 'email.sending' : 'email.sendShort'));
+      kb.send.group.visible = state.view === 'email' && !state.emailDone;
+    }
     const isInfo = state.view === 'info' && !!info;
     infoMain.group.visible = isInfo;
     infoAlt.group.visible = isInfo && !!info.secondary;
@@ -287,6 +341,13 @@ export function createConnectPanel({ pointer, sfx }) {
       if (!expired) laterBtn.group.userData.later = later;
       show('unlock');
     },
+    /** Type an email address in VR. send(email, news) → resolves with a message, or throws. */
+    emailForm(send) {
+      onEmailSend = send;
+      buildKeyboard();
+      Object.assign(state, { email: state.email || '', emailMsg: '', emailBusy: false, emailDone: false, news: !!state.news });
+      show('email');
+    },
     /** A short card: { title, sub, icon, page: [i, n], primary: { label, onClick }, secondary? }. */
     info(card) { info = card; show('info'); },
     /** "Almost there: click Allow on your PC". */
@@ -296,7 +357,7 @@ export function createConnectPanel({ pointer, sfx }) {
     welcome(fn) { pairFn = fn; onCode = fn; show('welcome'); },
     press, // same as pointing at a key (used by tests)
     hide() { group.visible = false; },
-    update() { if (group.visible && ((state.view === 'status' && state.msg === 'link.connecting') || state.view === 'waiting')) draw(); },
+    update() { if (group.visible && ((state.view === 'status' && state.msg === 'link.connecting') || state.view === 'waiting' || state.view === 'email')) draw(); },
   };
   return api;
 }

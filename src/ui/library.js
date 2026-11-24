@@ -4,6 +4,7 @@
 // It's drawn with Canvas 2D (fast, and Chinese titles just work) onto a curved mesh.
 import * as THREE from 'three';
 import { api } from '../api.js';
+import { log } from '../log.js';
 import { Spring } from './widgets.js';
 import { canvasTexture, font, ellipsize, roundRect, drawPlaceholder, drawCover, getImage, fmtTime } from './text.js';
 import { t, onLang } from '../i18n.js';
@@ -143,7 +144,8 @@ export class LibraryPanel {
         this.openT = Math.min(this.openT, 0.2);
       }
     } catch (e) {
-      this.error = e.status === 401 ? { key: 'lib.notPaired' } : { key: 'lib.loadFailed', vars: { msg: e.message } };
+      log('library-failed', { tab, msg: e.message, status: e.status });
+      this.error = e.status === 401 ? { key: 'lib.notPaired' } : e.code === 'timeout' || /timeout|link closed|hub-offline|connection/.test(e.message) ? { key: 'lib.noAnswer' } : { key: 'lib.loadFailed', vars: { msg: e.message } };
       this.data = null;
     }
     this.loading = false;
@@ -260,6 +262,7 @@ export class LibraryPanel {
   }
 
   _regionAt(x, y) {
+    if (this.error && this.retryRegion) { const r = this.retryRegion; if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r; }
     for (const r of this.regions) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
     if (y < HEADER) return null;
     const cy = y + this.scroll;
@@ -312,7 +315,15 @@ export class LibraryPanel {
     if (this.loading && !this.data) {
       ctx.fillStyle = '#9aa3c7'; ctx.font = font(40); ctx.fillText(t('lib.loading'), W / 2, H / 2 + 40);
     } else if (this.error) {
-      ctx.fillStyle = '#ff9a8a'; ctx.font = font(38); ctx.fillText(t(this.error.key, this.error.vars), W / 2, H / 2 + 40);
+      ctx.fillStyle = '#ff9a8a'; ctx.font = font(38); ctx.fillText(ellipsize(ctx, t(this.error.key, this.error.vars), W - 160), W / 2, H / 2 + 10);
+      // a big "Try again"
+      ctx.font = font(34, 750);
+      const label = t('connect.retry');
+      const w = Math.ceil(ctx.measureText(label).width) + 90, h = 74, x = W / 2 - w / 2, y = H / 2 + 60;
+      roundRect(ctx, x, y, w, h, h / 2);
+      ctx.fillStyle = this.hover?.key === 'retry' ? '#ffffff' : '#ffb35c'; ctx.fill();
+      ctx.fillStyle = '#140a10'; ctx.fillText(label, W / 2, y + h / 2 + 2);
+      this.retryRegion = { key: 'retry', x, y, w, h, action: () => { this.sfx.select(); this.load(); } };
     } else if (this.data && !this.tiles.length) {
       ctx.fillStyle = '#9aa3c7'; ctx.font = font(38);
       ctx.fillText(ellipsize(ctx, t(this.tab === 'karaoke' ? 'lib.emptyKaraoke' : this.tab === 'nas' ? 'lib.nasEmpty' : 'lib.empty'), W - 160), W / 2, H / 2 + 40);

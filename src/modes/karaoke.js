@@ -13,6 +13,7 @@ import { canvasTexture, font, ellipsize, roundRect, fmtTime } from '../ui/text.j
 import { t as tr, onLang, lyricsScript } from '../i18n.js';
 import { link } from '../link.js';
 import { demo } from '../demo.js';
+import { log } from '../log.js';
 import { createVocalCut } from '../audio/vocalCut.js';
 
 const W = 1280, H = 720;
@@ -86,11 +87,13 @@ export class KaraokeMode {
       this.song = await r.json();
       if (!this.song?.lines) throw new Error('no lyrics');
       this.song.id = item.id;
-    } catch {
+    } catch (e) {
+      log('karaoke-song-failed', { id: item.id, msg: e?.message });
       this.state = 'empty';
       this.message = 'karaoke.loadFailed';
       return this.draw(0);
     }
+    log('karaoke-start', { id: item.id, quick: !!this.song.quick });
     const midi = this.song.notes.map((n) => n.midi).sort((a, b) => a - b);
     this.lo = (midi[Math.floor(midi.length * 0.03)] ?? 50) - 2;
     this.hi = (midi[Math.floor(midi.length * 0.97)] ?? 70) + 2;

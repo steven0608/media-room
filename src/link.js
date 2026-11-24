@@ -220,6 +220,7 @@ class Link {
   }
 
   _onMessage(data) {
+    this.lastHeard = Date.now();
     if (typeof data === 'string') {
       let m;
       try { m = JSON.parse(data); } catch { return; }
@@ -237,6 +238,8 @@ class Link {
   // ---------------------------------------------------------------- requests
   /** fetch() over the link. Bodies stream in as they arrive (music/video start before the end). */
   async fetch(path, init = {}) {
+    // a connection that died quietly (app paused, Wi-Fi blip) is rebuilt instead of waited on
+    if (this.state === 'open' && this.dc && this.dc.readyState !== 'open') this._closed();
     await this.connect();
     const id = this.nextId++;
     const headers = {};
@@ -263,6 +266,15 @@ class Link {
         },
       };
       this.pending.set(id, p);
+      // no answer at all within the time limit: give up on this request, and if the hub has been
+      // silent the whole time, the connection is dead: close it so the next request reconnects
+      const limit = init.timeout ?? 20000;
+      const sentAt = Date.now();
+      setTimeout(() => {
+        if (headDone || !this.pending.has(id)) return;
+        p.fail(Object.assign(new Error('timeout'), { code: 'timeout' }));
+        if ((this.lastHeard || 0) < sentAt) this._closed();
+      }, limit);
       this._send({ t: 'req', id, method: init.method || 'GET', path, headers, body: init.body ?? null });
     });
   }
