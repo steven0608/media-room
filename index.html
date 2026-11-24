@@ -52,6 +52,25 @@
     </div>
   </div>
 
+  <!-- Microphone: asked here, on the flat screen, where the Quest can show the question -->
+  <div class="overlay hidden" id="miccard">
+    <div class="card hero" role="dialog" aria-labelledby="mic-title">
+      <div style="font-size:46px" aria-hidden="true">🎤</div>
+      <h1 id="mic-title" data-i18n-html="micx.title">Turn on your <span>microphone</span></h1>
+      <p class="muted" data-i18n="micx.sub">Karaoke uses it so you hear yourself through the speakers and get a score. Nothing is recorded or sent anywhere.</p>
+      <p class="error" id="mic-status" role="status"></p>
+      <ol class="muted hidden" id="mic-steps" style="text-align:left;margin:6px auto 14px;max-width:420px;line-height:1.7">
+        <li data-i18n-html="micx.s1">Press the <b>Meta</b> button and open <b>Settings</b>.</li>
+        <li data-i18n-html="micx.s2">Go to <b>Apps</b> → <b>Still Water</b> → <b>Permissions</b> (or <b>Privacy &amp; safety</b> → <b>Microphone</b>).</li>
+        <li data-i18n-html="micx.s3">Switch <b>Microphone</b> on, come back, and press <b>Try again</b>.</li>
+      </ol>
+      <div class="row" style="justify-content:center">
+        <button class="btn primary" id="mic-allow" type="button" data-i18n="micx.allow">Allow microphone</button>
+        <button class="btn" id="mic-back" type="button" data-i18n="email.backVr">Back to VR</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Welcome -->
   <div class="overlay hidden" id="welcome">
     <div class="card hero">

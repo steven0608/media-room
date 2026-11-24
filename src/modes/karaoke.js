@@ -44,6 +44,7 @@ export class KaraokeMode {
     this.song = null;
     this.state = 'empty'; // empty | loading | singing | score
     this.onChange = () => {};
+    this.onMicHelp = () => {}; // "Turn on microphone" (main.js shows the microphone screen)
     this.micLevel = 0;
     this.trail = [];
     this.hits = 0; this.total = 0; this.streak = 0; this.bestStreak = 0;
@@ -302,7 +303,7 @@ export class KaraokeMode {
       this._drawLyrics(t, true);
       this._drawHud(t);
       if (this.goT != null && clock - this.goT < 0.9) this._drawGo(clock - this.goT);
-    } else { this.regions = []; this.tuneRegions = []; this._drawScore(clock); }
+    } else { this.regions = []; this.tuneRegions = []; this.micRegion = null; this._drawScore(clock); }
     this.texture.needsUpdate = true;
   }
 
@@ -518,9 +519,28 @@ export class KaraokeMode {
     ctx.fillText(ellipsize(ctx, `${s.title} · ${s.artist}`, 700), 44, 28);
     ctx.textAlign = 'right';
     const inTune = this.streak > 2 ? tr('karaoke.inTune', { s: Math.floor(this.streak) }) : '';
-    const micText = this.autosing ? [tr('karaoke.demo'), inTune].filter(Boolean).join(' · ') : this.mic.ready ? inTune || tr('karaoke.micOn') : tr(this.mic.error || 'karaoke.micOff');
-    ctx.fillStyle = this.mic.ready || this.autosing ? '#5ce1e6' : '#ff9a8a';
-    ctx.fillText(micText, W - 44, 28);
+    if (!this.autosing && !this.mic.ready) {
+      // no microphone yet: a real button (pressing it steps out of VR to ask; see main.js)
+      ctx.font = font(24, 700);
+      const label = tr('karaoke.micButton');
+      const w = Math.ceil(ctx.measureText(label).width) + 40, h = 44, x = W - 44 - w, y = 6;
+      const hov = this.hover?.key === 'mic';
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
+      roundRect(ctx, x, y, w, h, h / 2);
+      ctx.fillStyle = hov ? '#ff7ab8' : `rgba(255,79,163,${0.75 + 0.25 * pulse})`;
+      ctx.fill();
+      ctx.fillStyle = '#140a10';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+      ctx.textBaseline = 'alphabetic';
+      this.micRegion = { key: 'mic', x, y, w, h };
+    } else {
+      const micText = this.autosing ? [tr('karaoke.demo'), inTune].filter(Boolean).join(' · ') : inTune || tr('karaoke.micOn');
+      ctx.fillStyle = '#5ce1e6';
+      ctx.fillText(micText, W - 44, 28);
+      this.micRegion = null;
+    }
     // progress
     const dur = s.duration || this.audio.duration || 1;
     roundRect(ctx, 44, H - 40, W - 88, 8, 4); ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fill();
@@ -619,7 +639,7 @@ export class KaraokeMode {
 
   /** Pointer support for the board's buttons. x, y in canvas pixels. */
   hit(x, y) {
-    return [...this.regions, ...(this.tuneRegions || [])].find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) || null;
+    return [...this.regions, ...(this.tuneRegions || []), ...(this.micRegion ? [this.micRegion] : [])].find((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) || null;
   }
   setHover(r) {
     if ((r?.key ?? null) === (this.hover?.key ?? null)) return;
@@ -633,6 +653,7 @@ export class KaraokeMode {
     else if (r.key === 'echo') { this.voice.setEcho(!this.voice.echo); store.set('voiceEcho', this.voice.echo); }
     else if (r.key === 'cut' && this.cut && !this.cut.mono) { this.cut.set(!this.cut.on); store.set('vocalCut', this.cut.on); }
     else if (r.key.startsWith('tune:')) store.set('voiceTune', this.voice.setTune(r.key.slice(5)));
+    else if (r.key === 'mic') this.onMicHelp();
   }
 
   _drawScore(clock) {

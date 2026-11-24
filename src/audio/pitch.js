@@ -24,6 +24,13 @@ export class Mic {
     return this.pending;
   }
 
+  /** Ask again from a button press: forget a question that was never answered. */
+  retry() {
+    this.pending = null;
+    this.error = '';
+    return this.open();
+  }
+
   /** 'granted' | 'denied' | 'prompt' | 'unknown' — without asking. */
   async permission() {
     try { return (await navigator.permissions.query({ name: 'microphone' })).state; } catch { return 'unknown'; }

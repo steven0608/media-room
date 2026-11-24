@@ -416,7 +416,9 @@ async function enterVR() {
     setFrameRate();
     session.addEventListener('end', () => {
       xrSession = null; placeConsole(false); ui.position.set(0, CONFIG.seatedEyeHeight, 0); ui.rotation.set(0, 0, 0); rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0);
-      if (emailAfterExit) { emailAfterExit = false; showEmailCard(); } else showWelcome();
+      if (emailAfterExit) { emailAfterExit = false; showEmailCard(); }
+      else if (micAfterExit) { micAfterExit = false; showMicCard(); }
+      else showWelcome();
     });
     renderer.xr.getReferenceSpace()?.addEventListener?.('reset', () => { placeFrames = 5; });
     // Quest system menu (or the headset taken off): pause what's playing, as Meta's store requires.
@@ -436,7 +438,7 @@ function setFrameRate() {
 }
 
 // ---------------------------------------------------------------- overlays
-function hideOverlays() { for (const id of ['pairing', 'welcome', 'emailcard']) $(id).classList.add('hidden'); }
+function hideOverlays() { for (const id of ['pairing', 'welcome', 'emailcard', 'miccard']) $(id).classList.add('hidden'); }
 function showWelcome() {
   hideOverlays();
   $('welcome').classList.remove('hidden');
@@ -679,6 +681,48 @@ async function connectNearby(hub) {
 connectUi.onConnect((hub) => connectNearby(hub));
 connectUi.onRetry(() => connectFlow());
 connectUi.onDemo(() => startDemo());
+
+// ---------------------------------------------------------------- "turn on the microphone"
+// The Quest can't show the permission question inside VR, so the karaoke board's button steps out
+// to a flat screen: "Allow microphone" asks properly; if the Quest has it switched off for us, the
+// screen says where to switch it on. Then "Back to VR".
+let micAfterExit = false;
+function askMic() {
+  if (inVR() && xrSession) { micAfterExit = true; xrSession.end(); return; }
+  showMicCard();
+}
+function showMicCard() {
+  hideOverlays();
+  $('miccard').classList.remove('hidden');
+  $('mic-status').textContent = '';
+  $('mic-steps').classList.add('hidden');
+  $('mic-allow').classList.remove('hidden');
+  $('mic-allow').textContent = tr('micx.allow');
+  $('mic-back').textContent = tr(vrState === 'ok' ? 'email.backVr' : 'email.back');
+}
+$('mic-allow').addEventListener('click', async () => {
+  $('mic-status').style.color = '';
+  $('mic-status').textContent = tr('micx.asking');
+  const ok = await Promise.race([karaoke.mic.retry(), new Promise((r) => setTimeout(() => r(null), 20000))]);
+  if (ok) {
+    karaoke.voice.connect(karaoke.mic.source);
+    $('mic-status').style.color = 'var(--ok)';
+    $('mic-status').textContent = tr('micx.on');
+    $('mic-allow').classList.add('hidden');
+    $('mic-steps').classList.add('hidden');
+    sfx.select?.();
+  } else {
+    // blocked (or the question never came): show where to switch it on
+    $('mic-status').textContent = tr(karaoke.mic.error === 'karaoke.noMic' ? 'micx.none' : 'micx.blocked');
+    $('mic-steps').classList.remove('hidden');
+    $('mic-allow').textContent = tr('micx.again');
+  }
+});
+$('mic-back').addEventListener('click', () => {
+  $('miccard').classList.add('hidden');
+  if (vrState === 'ok') enterVR(); else showWelcome();
+});
+karaoke.onMicHelp = () => askMic();
 
 // ---------------------------------------------------------------- "email me the setup guide"
 // Typing an address in VR is clumsy, so we step out to the flat screen for a moment, where the
