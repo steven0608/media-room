@@ -143,6 +143,7 @@ pointer.add(screen.mesh, {
 });
 music.onAction = async (key) => {
   const m = music.match;
+  if (key === 'library') return openLibrary();
   if (key === 'sing' && m?.karaoke?.ready) {
     setMode('karaoke');
     karaoke.start({ id: m.karaoke.id });
@@ -167,7 +168,13 @@ const consoleUi = createConsole({
   pointer,
   sfx,
   actions: {
-    mode: (m) => setMode(m),
+    mode: (m) => {
+      setMode(m);
+      if (m === 'karaoke') maybeAskMic();
+      // nothing to play in this mode yet: open the library on the right tab straight away
+      const empty = (m === 'music' && !music.current) || (m === 'cinema' && !cinema.info) || (m === 'karaoke' && karaoke.state === 'empty');
+      if (empty && !library.isOpen) openLibrary();
+    },
     library: () => openLibrary(),
     toggle: () => togglePlay(),
     prev: () => (mode === 'cinema' ? cinema.skip(-10) : music.prev()),
@@ -412,6 +419,7 @@ async function enterVR() {
     layout.restore('library', 'console');
     placeFrames = 25; // measure your head height after tracking settles
     if (trialOver()) showUnlock(true); // in VR: the unlock card instead of your library
+    else setTimeout(maybeTour, 2500);  // first visit: the short tour, once the room has settled
     if (mode === 'idle') setMode('music');
     setFrameRate();
     session.addEventListener('end', () => {
@@ -597,6 +605,7 @@ async function connectFlow() {
   connectUi.hide();
   updateHud();
   updateWelcome();
+  setTimeout(maybeTour, 1500); // first visit: a short tour (once)
   $('enter-vr').disabled = vrState !== 'ok';
   if (renderer.xr.isPresenting) return;
   showWelcome();
@@ -723,6 +732,43 @@ $('mic-back').addEventListener('click', () => {
   if (vrState === 'ok') enterVR(); else showWelcome();
 });
 karaoke.onMicHelp = () => askMic();
+karaoke.onLibrary = () => openLibrary();
+karaoke.onStart = () => setTimeout(() => maybeAskMic(), 300);
+
+// ---------------------------------------------------------------- first visit: a 3-card tour
+// Shown once (in VR, the first time the room is ready): how to point, where things are, and how
+// to bring the menus to you. "Skip" ends it; it never comes back by itself.
+function tour(step = 0) {
+  if (!inVR()) return;
+  const pages = [
+    { icon: '👉', title: tr('tour.t1'), sub: tr('tour.s1') },
+    { icon: '🎛️', title: tr('tour.t2'), sub: tr('tour.s2') },
+    { icon: '🖐️', title: tr('tour.t3'), sub: tr('tour.s3') },
+  ];
+  const p = pages[step];
+  const last = step === pages.length - 1;
+  connectUi.info({
+    ...p,
+    page: [step, pages.length],
+    primary: { label: tr(last ? 'tour.go' : 'connect.next'), onClick: () => { if (last) { store.set('toured', true); connectUi.hide(); } else tour(step + 1); } },
+    secondary: last ? null : { label: tr('tour.skip'), onClick: () => { store.set('toured', true); connectUi.hide(); } },
+  });
+}
+function maybeTour() {
+  if (inVR() && !store.get('toured', false) && !connectUi.visible) tour(0);
+}
+
+// Karaoke without a microphone: ask once per visit, in VR, instead of hoping the button is noticed.
+let micAsked = false;
+function maybeAskMic() {
+  if (micAsked || karaoke.mic.ready || karaoke.autosing || !inVR() || connectUi.visible) return;
+  micAsked = true;
+  connectUi.info({
+    icon: '🎤', title: tr('micq.title'), sub: tr('micq.sub'),
+    primary: { label: tr('micq.on'), onClick: () => { connectUi.hide(); askMic(); } },
+    secondary: { label: tr('connect.notNow'), onClick: () => connectUi.hide() },
+  });
+}
 
 // ---------------------------------------------------------------- "email me the setup guide"
 // Typing an address in VR is clumsy, so we step out to the flat screen for a moment, where the

@@ -101,7 +101,12 @@ export function createConnectPanel({ pointer, sfx }) {
     demo: B('connect.demo', P.magenta, 0.09, -0.3, 0.16, () => onDemo()),
   };
   const statusDemo = B('connect.demo', P.magenta, 0.11, -0.12, 0.2, () => onDemo());
-  const allExtra = [...Object.values(choice), ...Object.values(ghub), ...Object.values(under), statusDemo, ...Object.values(found), cancelBtn, buyBtn, laterBtn];
+  // the info view (first-visit tour, "turn on your microphone?"): one or two buttons
+  let info = null; // { title, sub, icon, page: [i, n], primary: { label, onClick }, secondary? }
+  const infoMain = B('connect.next', P.amber, 0.105, -0.2, 0.2, () => info?.primary?.onClick());
+  const infoAlt = B('connect.cancel', P.cyan, -0.105, -0.2, 0.2, () => info?.secondary?.onClick());
+  infoMain.key = infoAlt.key = null;
+  const allExtra = [...Object.values(choice), ...Object.values(ghub), ...Object.values(under), statusDemo, ...Object.values(found), cancelBtn, buyBtn, laterBtn, infoMain, infoAlt];
   function show(view) {
     Object.assign(state, { view, error: '' });
     group.visible = true;
@@ -148,7 +153,7 @@ export function createConnectPanel({ pointer, sfx }) {
     c.fillStyle = '#e8ecff';
     c.font = font(58, 750);
     const title = { pair: t('connect.pairTitle'), welcome: t('connect.welcomeTitle'), gethub: t('connect.getTitle'), waiting: t('connect.waitTitle'),
-      unlock: t(state.expired ? 'connect.unlockOver' : 'connect.unlockTitle') }[state.view] || t('app.name');
+      unlock: t(state.expired ? 'connect.unlockOver' : 'connect.unlockTitle'), info: info?.title }[state.view] || t('app.name');
     c.fillText(title, W / 2, 140);
     c.fillStyle = '#9aa3c7';
     c.font = font(34);
@@ -156,9 +161,20 @@ export function createConnectPanel({ pointer, sfx }) {
       : state.view === 'welcome' ? (nearby.length ? t('connect.foundSub', { name: nearby[0].name || 'PC' }) : t('connect.welcomeSub'))
       : state.view === 'waiting' ? t('connect.waitSub', { name: state.waitName || 'PC' })
       : state.view === 'unlock' ? (state.error || t(state.canBuy ? 'connect.unlockSub' : 'connect.unlockNoStore', { price: state.price }))
+      : state.view === 'info' ? info?.sub || ''
       : state.view === 'gethub' ? t('connect.getSub')
       : t(state.msg, state.vars || {});
     wrap(c, msg, W / 2, 205, W - 120, 44);
+    if (state.view === 'info' && info) {
+      if (info.icon) { c.font = font(110); c.fillText(info.icon, W / 2, 380); }
+      if (info.page) { // page dots
+        const [i, n] = info.page;
+        for (let k = 0; k < n; k++) {
+          c.fillStyle = k === i ? '#ffb35c' : 'rgba(207,216,255,0.3)';
+          c.beginPath(); c.arc(W / 2 + (k - (n - 1) / 2) * 30, 500, k === i ? 9 : 7, 0, Math.PI * 2); c.fill();
+        }
+      }
+    }
     if (state.view === 'gethub') {
       // the address, big, in a box — typed on the PC
       roundRect(c, 70, 300, W - 140, 104, 22);
@@ -205,6 +221,15 @@ export function createConnectPanel({ pointer, sfx }) {
     if (hasHub) connectBtn.setLabel(t('connect.oneClick', { name: nearby[0].name || 'PC' }));
     cancelBtn.group.visible = state.view === 'waiting';
     buyBtn.group.visible = laterBtn.group.visible = state.view === 'unlock';
+    const isInfo = state.view === 'info' && !!info;
+    infoMain.group.visible = isInfo;
+    infoAlt.group.visible = isInfo && !!info.secondary;
+    if (isInfo) {
+      infoMain.setLabel(info.primary.label);
+      if (info.secondary) infoAlt.setLabel(info.secondary.label);
+      // one button: centred and wider; two: side by side
+      infoMain.group.position.x = info.secondary ? 0.105 : 0;
+    }
     buyBtn.setLabel(state.busy && state.view === 'unlock' ? t('connect.unlocking') : t('connect.unlockBtn', { price: state.price || '' }));
     laterBtn.setLabel(t(state.expired ? 'connect.demo' : 'connect.notNow'));
     for (const b of Object.values(ghub)) b.group.visible = state.view === 'gethub';
@@ -262,6 +287,8 @@ export function createConnectPanel({ pointer, sfx }) {
       if (!expired) laterBtn.group.userData.later = later;
       show('unlock');
     },
+    /** A short card: { title, sub, icon, page: [i, n], primary: { label, onClick }, secondary? }. */
+    info(card) { info = card; show('info'); },
     /** "Almost there: click Allow on your PC". */
     waiting(name) { state.waitName = name; show('waiting'); },
     get view() { return group.visible ? state.view : null; },

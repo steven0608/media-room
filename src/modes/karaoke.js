@@ -45,6 +45,8 @@ export class KaraokeMode {
     this.state = 'empty'; // empty | loading | singing | score
     this.onChange = () => {};
     this.onMicHelp = () => {}; // "Turn on microphone" (main.js shows the microphone screen)
+    this.onLibrary = () => {}; // the big "Pick a song" button on the empty board
+    this.onStart = () => {};   // a song is starting (main.js may offer to turn on the microphone)
     this.micLevel = 0;
     this.trail = [];
     this.hits = 0; this.total = 0; this.streak = 0; this.bestStreak = 0;
@@ -74,6 +76,7 @@ export class KaraokeMode {
   get playing() { return this.state === 'singing' && !this.audio.paused; }
 
   async start(item) {
+    this.onStart();
     this.state = 'loading';
     this.message = 'karaoke.loading';
     this.draw(0);
@@ -292,6 +295,7 @@ export class KaraokeMode {
       ctx.font = font(30);
       ctx.fillText(tr(this.message || 'karaoke.pick'), W / 2, H / 2 + 30);
       this.regions = []; this.tuneRegions = [];
+      if (this.state === 'empty') this.regions.push(bigButton(ctx, tr('lib.openSongs'), W / 2, H / 2 + 140, this.hover?.key === 'library', '#ff4fa3'));
     } else if (this.state === 'countdown') {
       this.regions = [];
       this._drawTuneRow(); // choose auto-tune while counting in
@@ -654,6 +658,7 @@ export class KaraokeMode {
     else if (r.key === 'cut' && this.cut && !this.cut.mono) { this.cut.set(!this.cut.on); store.set('vocalCut', this.cut.on); }
     else if (r.key.startsWith('tune:')) store.set('voiceTune', this.voice.setTune(r.key.slice(5)));
     else if (r.key === 'mic') this.onMicHelp();
+    else if (r.key === 'library') this.onLibrary();
   }
 
   _drawScore(clock) {
@@ -717,3 +722,21 @@ function star(ctx, x, y, r, color, glow) {
 }
 
 export { api };
+
+/** The big pill button on an empty screen. Returns its region. */
+function bigButton(ctx, label, cx, cy, hov, color = '#ffb35c') {
+  ctx.font = font(34, 750);
+  const w = Math.ceil(ctx.measureText(label).width) + 90, h = 76, x = cx - w / 2, y = cy - h / 2;
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 420);
+  ctx.save();
+  ctx.shadowColor = color; ctx.shadowBlur = 18 + pulse * 18;
+  roundRect(ctx, x, y, w, h, h / 2);
+  ctx.fillStyle = hov ? '#ffffff' : color;
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#140a10';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, cx, cy + 2);
+  return { key: 'library', x, y, w, h };
+}

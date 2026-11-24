@@ -186,10 +186,11 @@ export class MusicMode {
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#e8ecff';
       ctx.font = font(58, 700);
-      ctx.fillText(t('music.pick'), W / 2, H / 2 - 28);
+      ctx.fillText(t('music.pick'), W / 2, H / 2 - 90);
       ctx.fillStyle = '#9aa3c7';
       ctx.font = font(30);
-      ctx.fillText(t('music.pickHint'), W / 2, H / 2 + 34);
+      ctx.fillText(t('music.pickHint'), W / 2, H / 2 - 30);
+      this.regions.push(bigButton(ctx, t('lib.openBig'), W / 2, H / 2 + 70, this.hover?.key === 'library'));
       this.texture.needsUpdate = true;
       return;
     }
@@ -368,4 +369,22 @@ export class MusicMode {
     ctx.font = font(26, 500);
     ctx.fillText(ellipsize(ctx, line(i + 2), maxW), W / 2, top + 268);
   }
+}
+
+/** The big pill button on an empty screen. Returns its region. */
+function bigButton(ctx, label, cx, cy, hov, color = '#ffb35c') {
+  ctx.font = font(34, 750);
+  const w = Math.ceil(ctx.measureText(label).width) + 90, h = 76, x = cx - w / 2, y = cy - h / 2;
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 420);
+  ctx.save();
+  ctx.shadowColor = color; ctx.shadowBlur = 18 + pulse * 18;
+  roundRect(ctx, x, y, w, h, h / 2);
+  ctx.fillStyle = hov ? '#ffffff' : color;
+  ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = '#140a10';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, cx, cy + 2);
+  return { key: 'library', x, y, w, h };
 }
