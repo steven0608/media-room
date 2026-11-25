@@ -190,7 +190,9 @@ ui.add(consoleUi.group);
 const APP_MODE = params.has('app') || matchMedia('(display-mode: standalone)').matches
   || matchMedia('(display-mode: fullscreen)').matches || typeof window.getDigitalGoodsService === 'function';
 const connectUi = createConnectPanel({ pointer, sfx });
-connectUi.group.position.set(0, -0.02, -0.78);
+connectUi.group.position.set(0, -0.3, -0.7);
+connectUi.group.rotation.set(-0.42, 0, 0);
+connectUi.group.scale.setScalar(0.9);
 ui.add(connectUi.group);
 // In VR the console sits low at your right hand; on a flat monitor it moves up into view.
 const consoleHome = { vr: false, pos: new THREE.Vector3(), tilt: 0 };
@@ -701,29 +703,33 @@ connectUi.onDemo(() => startDemo());
 // to a flat screen: "Allow microphone" asks properly; if the Quest has it switched off for us, the
 // screen says where to switch it on. Then "Back to VR".
 let micAfterExit = false;
+function micSettingsCard() {
+  connectUi.info({
+    icon: '⚙️', title: tr('micq.blockedTitle'), sub: tr('micq.blockedSub'),
+    primary: { label: tr('micx.again'), onClick: () => askMic() },
+    secondary: { label: tr('connect.notNow'), onClick: () => connectUi.hide() },
+  });
+}
 function askMic() {
   if (!inVR()) return showMicCard();
-  // In VR: ask right here. Leaving VR can close the installed app, so we never do.
-  connectUi.info({ icon: '🎤', title: tr('micq.asking'), sub: tr('micq.askingSub'), primary: { label: tr('connect.cancel'), onClick: () => connectUi.hide() } });
+  // In VR: ask right here (leaving VR can close the installed app). The Quest shows its own question
+  // in front of you; this card sits low so it doesn't cover it. We wait for the answer, however long.
   log('mic-ask');
-  const asked = karaoke.mic.retry();
-  Promise.race([asked, new Promise((r) => setTimeout(() => r(null), 10000))]).then((ok) => {
-    log('mic-answer', { ok, error: karaoke.mic.error || null });
+  connectUi.info({
+    icon: '🎤', title: tr('micq.asking'), sub: tr('micq.askingSub'),
+    primary: { label: tr('micq.notWorking'), onClick: () => micSettingsCard() },
+    secondary: { label: tr('connect.cancel'), onClick: () => connectUi.hide() },
+  });
+  const t0 = performance.now();
+  karaoke.mic.retry().then((ok) => {
+    log('mic-answer', { ok, error: karaoke.mic.error || null, afterSec: Math.round((performance.now() - t0) / 1000) });
     if (ok) {
       karaoke.voice.connect(karaoke.mic.source);
       connectUi.info({ icon: '🎤', title: tr('micq.onTitle'), sub: tr('micq.onSub'), primary: { label: tr('tour.go'), onClick: () => connectUi.hide() } });
       sfx.select?.();
       setTimeout(() => { if (connectUi.view === 'info') connectUi.hide(); }, 2500);
-      return;
-    }
-    // blocked, or the question never appeared: say exactly where to switch it on
-    connectUi.info({
-      icon: '⚙️', title: tr('micq.blockedTitle'), sub: tr('micq.blockedSub'),
-      primary: { label: tr('micx.again'), onClick: () => askMic() },
-      secondary: { label: tr('connect.notNow'), onClick: () => connectUi.hide() },
-    });
+    } else if (connectUi.view === 'info') micSettingsCard(); // a clear "no": show where to switch it on
   });
-  asked.then((ok) => { if (ok && !karaoke.voice.out) karaoke.voice.connect(karaoke.mic.source); }); // late "yes"
 }
 function showMicCard() {
   hideOverlays();
@@ -759,6 +765,12 @@ $('mic-back').addEventListener('click', () => {
 karaoke.onMicHelp = () => askMic();
 karaoke.onLibrary = () => openLibrary();
 karaoke.onStart = () => setTimeout(() => maybeAskMic(), 300);
+
+// A card and the library both sit low in front of you: while a card is up, the library steps aside.
+{
+  const showInfo = connectUi.info;
+  connectUi.info = (card) => { if (library.isOpen) library.close(); showInfo(card); };
+}
 
 // ---------------------------------------------------------------- first visit: a 3-card tour
 // Shown once (in VR, the first time the room is ready): how to point, where things are, and how

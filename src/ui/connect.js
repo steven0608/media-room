@@ -132,7 +132,7 @@ export function createConnectPanel({ pointer, sfx }) {
       try { state.emailMsg = await onEmailSend(state.email, state.news); state.emailDone = true; } catch (e) { state.emailMsg = e.message; }
       finally { state.emailBusy = false; draw(); }
     }, P.amber);
-    g.traverse((o) => { o.renderOrder = 40; if (o.material) o.material.depthTest = false; });
+    g.traverse((o) => { o.renderOrder = 42; if (o.material) o.material.depthTest = false; });
     g.position.set(0, -0.035, 0);
     group.add(g);
     kb = { g, keys, news, cancel, send };
@@ -296,7 +296,10 @@ export function createConnectPanel({ pointer, sfx }) {
   onLang(draw);
 
   // Always in front of the room (the big screen's own text must not show through), and solid.
-  group.traverse((o) => { o.renderOrder = 40; if (o.material) o.material.depthTest = false; });
+  // fixed layers, whatever the card's tilt: backing, then the text, then the buttons
+  group.traverse((o) => { o.renderOrder = 42; if (o.material) o.material.depthTest = false; });
+  plate.traverse((o) => { o.renderOrder = 40; });
+  headMesh.renderOrder = 41;
   plate.material.opacity = 0.96;
 
   const api = {
